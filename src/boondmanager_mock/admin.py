@@ -162,21 +162,40 @@ async def mutate(
     Once the mock runs in a container, this is the only way to simulate a
     source-side change.
 
-    Body: {"collection": "resources", "id": "3", "attributes": {...}}
+    Body: {"collection": "resources", "id": "3",
+           "attributes": {...}, "relationships": {...}}
+
+    Les RELATIONS sont patchables au même titre que les attributs, et ce n'est
+    pas un raffinement : chez BoondManager, le manager d'une ressource
+    (`mainManager`) et son agence (`agency`) sont des relations JSON:API, pas
+    des attributs. Sans elles, ce plan de contrôle ne sait simuler ni une
+    réaffectation d'entité ni un changement de hiérarchie — c'est-à-dire
+    précisément les deux mutations qu'un consommateur qui dérive des DROITS
+    D'ACCÈS d'un organigramme a besoin d'éprouver.
+
+    Un patch qui ne correspond à RIEN est refusé (400) plutôt qu'accepté :
+    voir `_verifier_clefs`.
     """
     if (denied := _guard(x_mock_admin_token)) is not None:
         return denied
     body = await request.json()
     collection = body.get("collection")
     item_id = str(body.get("id"))
-    patch = body.get("attributes", {})
+    patch_attributs = body.get("attributes", {})
+    patch_relations = body.get("relationships", {})
+
+    if not patch_attributs and not patch_relations:
+        return error(400, "nothing to patch: give 'attributes' and/or 'relationships'")
 
     items = state.dataset.get(collection)
     if not isinstance(items, list):
         return error(404, f"collection {collection!r} not found")
     for item in items:
         if item["id"] == item_id:
-            item.setdefault("attributes", {}).update(patch)
+            if (refus := _verifier_clefs(item, patch_attributs, patch_relations)) is not None:
+                return refus
+            item.setdefault("attributes", {}).update(patch_attributs)
+            _fusionner_relations(item, patch_relations)
             # L'avancée de l'horodatage n'est pas cosmétique : sans elle, le
             # curseur incrémental ne reverrait jamais l'enregistrement modifié,
             # et le test d'incrémentalité passerait en ne testant rien.
@@ -232,6 +251,64 @@ async def clock(
     engine.clock_offset += float(body.get("advance_seconds", 0))
     state.avancer_evolution(engine.now())
     return JSONResponse({"clock_offset": engine.clock_offset})
+
+
+def _verifier_clefs(
+    item: dict[str, Any],
+    patch_attributs: dict[str, Any],
+    patch_relations: dict[str, Any],
+) -> JSONResponse | None:
+    """Refuse un patch dont une clef n'existe pas sur l'enregistrement.
+
+    Le mode de panne que cette garde ferme, et il a coûté une demi-journée :
+    patcher `attributes: {"main_manager_id": …}` — le nom de la COLONNE vue à
+    l'arrivée du pipeline, pas celui de la relation JSON:API — renvoyait
+    `{"status": "mutated"}` en ne changeant rien. Le scénario de test aval
+    passait au VERT en n'ayant rien éprouvé : le pire résultat possible pour
+    un plan de contrôle dont la raison d'être est justement de faire bouger
+    quelque chose.
+
+    Le refus nomme les clefs disponibles : dans ce cas précis, la réponse
+    contient `mainManager` et le testeur voit immédiatement son erreur.
+    """
+    relations_connues = item.get("relationships", {})
+    inconnues_a = [c for c in patch_attributs if c not in item.get("attributes", {})]
+    inconnues_r = [c for c in patch_relations if c not in relations_connues]
+    if not inconnues_a and not inconnues_r:
+        return None
+
+    details = []
+    if inconnues_a:
+        details.append(f"unknown attribute(s) {sorted(inconnues_a)}")
+    if inconnues_r:
+        details.append(f"unknown relationship(s) {sorted(inconnues_r)}")
+    return error(
+        400,
+        f"{'; '.join(details)} — available relationships: {sorted(relations_connues)}",
+    )
+
+
+def _fusionner_relations(item: dict[str, Any], patch: dict[str, Any]) -> None:
+    """Applique un patch de relations, clef par clef.
+
+    Clef par clef et non en bloc : patcher `mainManager` ne doit pas emporter
+    `agency` avec lui — symétrique du `.update()` des attributs.
+
+    Deux écritures sont acceptées, et c'est délibéré :
+
+      • la forme canonique JSON:API, `{"agency": {"data": {"id": "2",
+        "type": "agency"}}}`, quand le test veut être explicite ;
+      • l'identifiant nu, `{"agency": "2"}`, qui REPREND le `type` déjà porté
+        par l'enregistrement. Plus court à écrire, et surtout impossible à
+        désaccorder : le type ne passe jamais par la main du testeur.
+    """
+    relations = item.setdefault("relationships", {})
+    for nom, valeur in patch.items():
+        if isinstance(valeur, dict):
+            relations[nom] = valeur
+            continue
+        type_courant = relations[nom].get("data", {}).get("type")
+        relations[nom] = {"data": {"id": str(valeur), "type": type_courant}}
 
 
 _UPDATED_AT = "updateDate"

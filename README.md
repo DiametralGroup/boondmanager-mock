@@ -186,6 +186,26 @@ All driveable over HTTP via `/__admin/inject`:
 And to simulate source-side changes: `POST /__admin/mutate` (bumps
 `updateDate`), `POST /__admin/delete` (logical deletion via `isDeleted`).
 
+`mutate` patches **attributes and relationships**, key by key:
+
+```jsonc
+{"collection": "resources", "id": "3",
+ "attributes":    {"state": 0},                 // a departure
+ "relationships": {"mainManager": "5",          // bare id — type is preserved
+                   "agency": {"data": {"id": "2", "type": "agency"}}}}
+```
+
+Relationships matter because `mainManager` and `agency` are relationships in
+the vendor's dialect, not attributes — so without them this control plane
+cannot simulate a reporting-line change or a re-assignment, the two mutations
+any consumer deriving **access rights** from an org chart has to exercise.
+
+> A key that exists on neither side is **rejected (400)**, and the message
+> lists the record's relationships. Patching `attributes: {"main_manager_id":
+> …}` — the column name seen downstream, not the relationship name — used to
+> answer `200 {"status": "mutated"}` and change nothing, so the downstream
+> scenario went green having exercised nothing.
+
 > `isDeleted` is a **mock affordance, absent from every default payload** since
 > 0.6.0 — the vendor exposes it on none of its eighteen collections (probed
 > 2026-08-12). Only `/__admin/delete` sets it. A consumer must therefore read

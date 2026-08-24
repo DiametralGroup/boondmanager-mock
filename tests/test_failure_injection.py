@@ -195,6 +195,88 @@ def test_mutate_avance_l_horodatage_et_rend_l_enregistrement_visible(client) -> 
     assert lui["attributes"]["updateDate"] >= tous["data"][-1]["attributes"]["updateDate"]
 
 
+# ── Mutations de RELATIONS ───────────────────────────────────────────────────
+#
+# Chez BoondManager, le manager d'une ressource et son agence sont des
+# RELATIONS JSON:API, pas des attributs. Un consommateur qui dérive des droits
+# d'accès d'un organigramme (insights360/iris) doit pouvoir simuler les deux
+# mutations correspondantes : changement de hiérarchie et réaffectation
+# d'entité.
+
+
+def test_mutate_change_une_relation_sans_toucher_aux_autres(client) -> None:
+    """Le patch est clef par clef, comme celui des attributs.
+
+    Sans cela, éprouver un changement de manager emporterait l'agence avec
+    lui, et le test aval observerait DEUX mutations en croyant en mesurer une.
+    """
+    avant = client.get("/api/resources/3", headers=JWT).json()["data"]
+    agence_avant = avant["relationships"]["agency"]["data"]["id"]
+
+    reponse = client.post(
+        "/__admin/mutate",
+        headers=ADMIN,
+        json={
+            "collection": "resources",
+            "id": "3",
+            "relationships": {"mainManager": {"data": {"id": "5", "type": "resource"}}},
+        },
+    )
+    assert reponse.status_code == 200
+
+    apres = client.get("/api/resources/3", headers=JWT).json()["data"]
+    assert apres["relationships"]["mainManager"]["data"]["id"] == "5"
+    assert apres["relationships"]["agency"]["data"]["id"] == agence_avant
+
+
+def test_mutate_accepte_l_identifiant_nu_et_conserve_le_type(client) -> None:
+    """`{"agency": "2"}` vaut la forme canonique — et le `type` ne vient pas
+    de la main du testeur, donc il ne peut pas se désaccorder."""
+    reponse = client.post(
+        "/__admin/mutate",
+        headers=ADMIN,
+        json={"collection": "resources", "id": "3", "relationships": {"agency": "2"}},
+    )
+    assert reponse.status_code == 200
+
+    relations = client.get("/api/resources/3", headers=JWT).json()["data"]["relationships"]
+    assert relations["agency"]["data"] == {"id": "2", "type": "agency"}
+
+
+def test_mutate_refuse_une_clef_inconnue_au_lieu_de_mentir(client) -> None:
+    """LA régression qui motive ce lot.
+
+    Patcher `attributes: {"main_manager_id": …}` — le nom de la colonne vue à
+    l'arrivée du pipeline, pas celui de la relation — renvoyait 200 et ne
+    changeait rien. Le scénario aval passait au vert sans rien avoir éprouvé.
+    Le refus doit en plus NOMMER les relations disponibles, pour que l'erreur
+    se corrige sans aller lire le code du mock.
+    """
+    reponse = client.post(
+        "/__admin/mutate",
+        headers=ADMIN,
+        json={
+            "collection": "resources",
+            "id": "3",
+            "attributes": {"main_manager_id": "5"},
+        },
+    )
+    assert reponse.status_code == 400
+    corps = reponse.text
+    assert "main_manager_id" in corps
+    assert "mainManager" in corps, "le message doit montrer la clef correcte"
+
+
+def test_mutate_refuse_un_patch_vide(client) -> None:
+    """« Muté » sans rien à muter est le même mensonge, sous une autre forme."""
+    reponse = client.post(
+        "/__admin/mutate",
+        headers=ADMIN,
+        json={"collection": "resources", "id": "3"},
+    )
+    assert reponse.status_code == 400
+
+
 def test_soft_delete_pose_un_drapeau_sans_supprimer(client) -> None:
     """Suppression LOGIQUE, jamais physique.
 

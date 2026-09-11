@@ -509,3 +509,57 @@ def test_chaque_agence_porte_du_package(client):
         f"agences sans package salarial : {vides}. "
         "Un axe métier vide rend vert par vacuité le gate de cloisonnement du consommateur."
     )
+
+
+def test_l_agence_du_contrat_diverge_parfois_de_celle_de_la_fiche(client):
+    """LE cas que le jeu ne portait pas, et qui a coûté un périmètre RLS faux.
+
+    BoondManager exprime le multi-rattachement par l'agence du CONTRAT : une
+    personne peut en avoir plusieurs, dans plusieurs agences, avec des rôles
+    différents. La fiche ne porte que l'agence de rattachement principal.
+
+    Mesuré le 2026-09-11 sur un tenant de production, 70 fiches multi-contrats
+    et 388 contrats : 18 (4,6 %) portent une agence différente de celle de leur
+    fiche, et 3 personnes ont des contrats sur plusieurs agences — dont le
+    dirigeant, réparti sur trois entités.
+
+    Le jeu donnait à chaque contrat l'agence de sa ressource. Un consommateur
+    qui prenait l'entité sur la fiche était donc VERT ici et rattachait 4,6 %
+    des contrats au mauvais périmètre en production — lisibles par les uns,
+    invisibles des autres. Ce n'est pas une hypothèse : c'est arrivé.
+    """
+    divergents = 0
+    total = 0
+    par_personne: dict[str, set[str]] = {}
+
+    for rid in [str(i) for i in range(1, 35)]:
+        adm = client.get(f"/api/resources/{rid}/administrative", headers=JWT)
+        if adm.status_code != 200:
+            continue
+        corps = adm.json()["data"]
+        ag_fiche = ((corps["relationships"].get("agency") or {}).get("data") or {}).get("id")
+        for ref in corps["relationships"]["contracts"]["data"]:
+            profil = client.get(f"/api/contracts/{ref['id']}", headers=JWT)
+            if profil.status_code != 200:
+                continue
+            rels = profil.json()["data"].get("relationships") or {}
+            ag = ((rels.get("agency") or {}).get("data") or {}).get("id")
+            assert ag is not None, "l'agence du contrat est servie sur 388/388 en production"
+            total += 1
+            par_personne.setdefault(rid, set()).add(ag)
+            if ag != ag_fiche:
+                divergents += 1
+
+    assert total > 20, "pas assez de contrats pour conclure"
+    assert divergents > 0, (
+        "aucun contrat ne diverge de sa fiche : le multi-rattachement n'est pas "
+        "reproduit, et un consommateur qui prend l'entité sur la fiche passe vert "
+        "par vacuité"
+    )
+    assert any(len(v) > 1 for v in par_personne.values()), (
+        "aucune personne n'a de contrats sur plusieurs agences — c'est pourtant "
+        "la forme même du multi-rattachement"
+    )
+    # La fréquence est plus dense que le réel (≈16 % contre 4,6 %) mais reste
+    # minoritaire : un jeu où la majorité diverge serait une autre fiction.
+    assert divergents < total / 2, "la divergence doit rester minoritaire, comme le réel"

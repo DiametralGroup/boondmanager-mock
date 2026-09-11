@@ -23,13 +23,25 @@ first:
 | 1 | `GET /resources/{id}/administrative` | standard (client JWT / basic) | the administrative tab: `contracts` relationship (all of the resource's contracts) + reduced `included`, seniority, civil status | ✅ implemented |
 | 2 | `GET /resources/{id}` (profile) | standard | `contracts` relationship + `included` — lighter than the administrative tab | ✅ implemented |
 | 3 | `GET /contracts/{id}` | standard | the FULL contract: `monthlySalary`, `hourlySalary`, daily costs, working time, `parentContract`/`childContract` chain | ✅ implemented |
-| 4 | `GET /apps/extract-payroll/contracts` and `GET /apps/accounting-payroll/contracts` | app installed (app JWT) | BULK contract search; the accounting-payroll variant adds payroll aggregates (`productionTimes`, `absencesTimes`, `expensesToPay`, `payrollTerm`) | ❌ out of scope (app auth) |
+| 4 | `GET /apps/extract-payroll/contracts` and `GET /apps/accounting-payroll/contracts` | **the ORDINARY client JWT — corrected 2026-09-10**, no app JWT needed; `month=YYYY-MM` is REQUIRED (422, code 1017, `source.parameter: month`) | BULK contract search — 148 rows for one month on the tenant probed — plus payroll aggregates (`productionTimes`, `internalTimes`, `absencesTimes`, `expensesToPay`, `expensesAlreadyAdvanced`, `payrollTerm`). ⚠️ Its `advantagesToPay` relationship is EMPTY on all 148: a « to pay » queue, not a history — it does **not** replace `/resources/{id}/advantages` | ❌ not served by the mock |
 
 **Recommended flow for an extractor without an app**:
 `GET /resources?maxResults=500` → for each resource,
 `GET /resources/{id}/administrative` → contract refs →
 `GET /contracts/{id}`. This is exactly the journey the mock serves, covered by
 `tests/test_dialecte.py::test_administrative_liste_les_contrats_et_contracts_id_les_detaille`.
+
+⚠️ **Take the profile, not the `included`.** The reduced contract shape carried
+in `administrative`'s `included` is missing seventeen attributes that only
+`GET /contracts/{id}` returns — among them `chargeFactor` (the charge
+coefficient, so any loaded cost), `numberOfWorkingDays`, `hourlySalary`, and
+`updateDate`, the cursor that lets a consumer merge instead of replacing.
+
+**For the salary PACKAGE, that flow is not enough.** Contractual entitlements
+live on the contract profile (`advantageTypes`); amounts actually PAID — the
+variable, the bonuses, the benefits in kind — live on a separate route,
+`GET /resources/{id}/advantages`. One call per resource, no cursor, no bulk
+collection. See [comparisons/2026-09-10.md](comparisons/2026-09-10.md).
 
 **Findings from the live probes**: `GET /contracts` (search) is blocked
 (WAF / 405) — the mock answers 405 the same way since v0.3.0. **Mind the

@@ -106,8 +106,12 @@ essential: outside the process, state can no longer be mutated in Python.
 Plus `resources/{id}/administrative` (the administrative tab — **THE official
 path to contracts**: `contracts` relationship + `included`, then
 `GET /contracts/{id}` for the full salary detail; see
-[`docs/EXTRACTION.md`](docs/EXTRACTION.md)), `resources/{id}/technical-data`
-(the résumé tab) and `application/current-user` (credentials smoke test).
+[`docs/EXTRACTION.md`](docs/EXTRACTION.md)), `resources/{id}/advantages` (the
+« Avantages versés » tab — **where variable pay lives**: one dated row per
+payment, sparse, no cursor, no bulk collection;
+[comparisons/2026-09-10.md](docs/comparisons/2026-09-10.md)),
+`resources/{id}/technical-data` (the résumé tab) and
+`application/current-user` (credentials smoke test).
 
 ¹ `GET` search does not exist in production (405 observed): the mock replies
 405 the same way, and the data is reached through `/{id}` and relationships.

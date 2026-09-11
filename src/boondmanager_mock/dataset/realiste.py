@@ -796,7 +796,9 @@ def _ressources(rng: random.Random) -> list[dict[str, Any]]:
     return ressources
 
 
-def _contrats(ressources: list[dict[str, Any]], rng: random.Random) -> list[dict[str, Any]]:
+def _contrats(
+    ressources: list[dict[str, Any]], rng: random.Random, graine: int
+) -> list[dict[str, Any]]:
     """Un contrat par salarié, plus six historiques CDD → CDI chaînés."""
     contrats: list[dict[str, Any]] = []
     ident = 1
@@ -830,6 +832,7 @@ def _contrats(ressources: list[dict[str, Any]], rng: random.Random) -> list[dict
                     fin_cdd,
                     mensuel=mensuel * 0.92,
                     rng=rng,
+                    graine=graine,
                     enfant=ident + 1,
                 )
             )
@@ -839,7 +842,17 @@ def _contrats(ressources: list[dict[str, Any]], rng: random.Random) -> list[dict
 
         fin = _fin_mois(2026, 5) if sortie else None
         contrats.append(
-            _contrat(ident, res, "CDI", embauche, fin, mensuel=mensuel, rng=rng, parent=precedent)
+            _contrat(
+                ident,
+                res,
+                "CDI",
+                embauche,
+                fin,
+                mensuel=mensuel,
+                rng=rng,
+                graine=graine,
+                parent=precedent,
+            )
         )
         ident += 1
     return contrats
@@ -854,10 +867,26 @@ def _contrat(
     *,
     mensuel: float,
     rng: random.Random,
+    graine: int,
     parent: int | None = None,
     enfant: int | None = None,
 ) -> dict[str, Any]:
-    cout_jour = round(mensuel * 12 * 1.47 / 218, 2)
+    # ┌─ LE COÛT JOURNALIER N'EST PAS DÉRIVABLE DU BRUT ────────────────────────┐
+    # │ Il valait `mensuel * 12 * 1.47 / 218` — le brut annuel chargé, étalé sur │
+    # │ les jours travaillés. La formule est plausible, et elle est FAUSSE.      │
+    # │                                                                          │
+    # │ Éprouvée le 2026-09-10 contre 25 contrats de production :                │
+    # │   1 vérifie à moins de 1 %, 24 non. Écart relatif médian 11,7 %,         │
+    # │   maximum 44,2 %.                                                        │
+    # │                                                                          │
+    # │ Le fournisseur calcule autre chose — vraisemblablement charges patronales │
+    # │ réelles et avantages compris. Servir une valeur qui se dérive             │
+    # │ exactement du brut inviterait un consommateur à « retrouver » une         │
+    # │ relation qui n'existe pas, puis à recalculer le coût lui-même plutôt      │
+    # │ qu'à lire le champ. Le décalage ci-dessous est DÉTERMINISTE (dérivé de    │
+    # │ l'identifiant) et suffisant pour casser la formule.                       │
+    # └──────────────────────────────────────────────────────────────────────────┘
+    cout_jour = round(mensuel * 12 * 1.47 / 218 * (0.88 + (ident * 37 % 45) / 100), 2)
     # Le réel émet TOUJOURS les clés parentContract/childContract (data null).
     rels: dict[str, Any] = {
         "dependsOn": _rel("resource", res["id"]),
@@ -888,31 +917,250 @@ def _contrat(
             "hourlySalary": round(mensuel / 151.67, 2),
             "forceHourlySalary": False,
             "contractAverageDailyCost": cout_jour,
-            "dailyExpenses": 9.05,
-            "monthlyExpenses": 75.0,
+            # ┌─ TROIS CHAMPS QUE LE MOCK REMPLISSAIT ET QUE LA PROD LAISSE ──┐
+            # │ Mesuré le 2026-09-10 sur 18 contrats : `dailyExpenses`,        │
+            # │ `monthlyExpenses`, `expensesDetails` et `calendar` sont SERVIS │
+            # │ mais renseignés ZÉRO fois. Le mock les remplissait sur 38 sur  │
+            # │ 38 — la fiction la plus crédible qui soit, et donc la plus     │
+            # │ coûteuse : un consommateur qui bâtissait dessus était vert en  │
+            # │ CI et trouvait une colonne vide en production. Même famille    │
+            # │ qu'`isDeleted`.                                                 │
+            # │                                                                 │
+            # │ Les clés restent émises — le fournisseur les émet — avec la    │
+            # │ valeur qu'il leur donne : vide.                                 │
+            # └─────────────────────────────────────────────────────────────────┘
+            "dailyExpenses": 0,
+            "monthlyExpenses": 0,
             "numberOfWorkingDays": 218,
             "chargeFactor": 1.47,
-            "expensesDetails": [
-                {
-                    "id": str(ident * 10 + 1),
-                    "expenseType": {"reference": 1, "name": "Titres restaurant"},
-                    "periodicity": "daily",
-                    "netAmount": 9.05,
-                }
-            ],
-            "advantageTypes": [],
+            "expensesDetails": [],
+            "advantageTypes": _types_avantages(res, graine),
             "informationComments": "",
             "currency": 0,
             "currencyAgency": 0,
             "exchangeRate": 1.0,
             "exchangeRateAgency": 1.0,
-            "calendar": "Standard",
-            "activityRate": 100,
+            "calendar": "",
+            # Renseigné ZÉRO fois sur 18 en production. Le servir à 100 laissait
+            # croire qu'on pouvait pondérer un brut par ce taux — ce qui a
+            # coûté 800 lignes de rémunération à zéro chez un consommateur.
+            "activityRate": 0,
             "partialWorkTimes": [],
             "isPartialWorkTimeEvenOdd": False,
+            # Émission ÉPARSE, comme le réel : la clé est absente sur un tiers
+            # des contrats, elle n'est pas nulle. Un consommateur qui suppose
+            # la clé présente doit tomber ici, pas en production.
+            **(
+                {
+                    "probationEndDate": _d(debut + timedelta(days=120)),
+                    "renewalProbationEndDate": "",
+                }
+                if ident % 3
+                else {}
+            ),
         },
         "relationships": rels,
     }
+
+
+#: Le catalogue d'avantages de Boréal Conseil — configuration d'instance, donc
+#: propre au monde fictif du mock. Sa FORME, elle, est celle relevée en
+#: production le 2026-09-10, pièges compris :
+#:
+#:   • `reference` n'est PAS un code global — le même 21 sert ici deux libellés
+#:     différents, exactement comme chez le fournisseur ;
+#:   • `category` ne dit pas ce qui est acquis : « Variable » est `fixedAmount`
+#:     et « Prime de vacances » est `variableSalaryBasis` ;
+#:   • les trois quotas ne sont pas interchangeables, et aucun n'est « le
+#:     montant » — selon la ligne, un seul est renseigné, ou deux.
+#:
+#: (reference, name, frequency, category, participation, employee, agency)
+CATALOGUE_AVANTAGES: tuple[tuple[int, str, str, str, float, float, float], ...] = (
+    (7, "Titre restaurant", "daily", "package", 5.83, 5.83, 0.0),
+    (6, "Abonnement transport", "monthly", "package", 0.0, 45.4, 0.0),
+    (8, "Prime de vacances", "semiAnnual", "variableSalaryBasis", 0.0, 800.0, 12.0),
+    (21, "Variable", "annual", "fixedAmount", 0.0, 3000.0, 1.5),
+    (21, "Mutuelle", "monthly", "fixedAmount", 0.0, 38.5, 38.5),
+    (4, "Prime exceptionnelle", "annual", "fixedAmount", 0.0, 500.0, 0.0),
+)
+
+
+#: Décalage de graine des flux AUXILIAIRES.
+#:
+#: ┌─ POURQUOI CES GÉNÉRATEURS NE TIRENT PAS DANS `rng` ──────────────────────┐
+#: │ Le jeu de données est déterministe par construction : `random.Random(42)` │
+#: │ et une ancre temporelle fixe. Mais le déterminisme n'est pas la seule     │
+#: │ propriété qui compte — la STABILITÉ entre deux versions du mock en est    │
+#: │ une autre, et elle est plus fragile.                                      │
+#: │                                                                           │
+#: │ Un tirage ajouté au MILIEU du flux partagé décale tout ce qui est généré  │
+#: │ après lui. Mesuré en ajoutant les avantages : les lignes de temps         │
+#: │ passaient de 61 à 60, sans qu'une seule ligne de leur générateur ait      │
+#: │ bougé, et un test de pagination tombait à l'autre bout du dépôt. Chez le  │
+#: │ consommateur, c'est pire : insights360 compare des ENSEMBLES              │
+#: │ D'IDENTIFIANTS (le gate `inner ⊆ outer`), qui n'ont plus de sens si le    │
+#: │ monde bouge sous eux.                                                     │
+#: │                                                                           │
+#: │ Les générateurs ajoutés après coup tirent donc dans un flux DÉRIVÉ de la  │
+#: │ graine, jamais dans le flux principal. Tout ce qui existait déjà reste    │
+#: │ octet pour octet identique.                                               │
+#: └───────────────────────────────────────────────────────────────────────────┘
+DECALAGE_AVANTAGES = 1_000_003
+
+
+def _types_avantages(res: dict[str, Any], graine: int) -> list[dict[str, Any]]:
+    """Le package contractuel d'une ressource — de zéro à quatre lignes.
+
+    La cardinalité est VARIABLE parce qu'elle l'est en production (de 0 à 5 sur
+    l'échantillon) : un jeu où chaque contrat porte exactement une ligne laisse
+    passer vert un modèle qui ne sait traiter que ce cas.
+    """
+    ident = int(res["id"])
+    rng = random.Random(graine * DECALAGE_AVANTAGES + ident)
+    # ┌─ NE PAS SÉLECTIONNER PAR MODULO SUR L'IDENTIFIANT ──────────────────────┐
+    # │ Ce test valait `ident % 7 == 0`, et `_avantages_verses` gardait les      │
+    # │ `ident % 3 == 0`. Les deux ont écarté EXACTEMENT la même cohorte : les   │
+    # │ ressources 7, 14 et 28 — c'est-à-dire toute l'agence de Nantes, la seule │
+    # │ entité qui distingue deux rôles BI chez le consommateur.                 │
+    # │                                                                          │
+    # │ Conséquence : son gate de cloisonnement voyait les deux rôles compter    │
+    # │ le même nombre de lignes et ne pouvait rien prouver. Un jeu de données   │
+    # │ qui laisse un axe métier vide rend le test VERT PAR VACUITÉ.             │
+    # │                                                                          │
+    # │ Un identifiant n'est pas une variable aléatoire : ici il est attribué    │
+    # │ par agence, donc tout modulo se corrèle à l'agence. Le tirage passe donc │
+    # │ par le flux dédié, et `test_chaque_agence_porte_du_package` garantit la  │
+    # │ couverture plutôt que de l'espérer.                                      │
+    # └──────────────────────────────────────────────────────────────────────────┘
+    if rng.random() < 0.15:  # quelques contrats n'ont aucun avantage
+        return []
+    combien = rng.randint(1, 4)
+    return [
+        {
+            "reference": reference,
+            "name": nom,
+            "frequency": frequence,
+            "category": categorie,
+            "participationQuota": participation,
+            "employeeQuota": employe,
+            "agencyQuota": agence,
+        }
+        for reference, nom, frequence, categorie, participation, employe, agence in rng.sample(
+            CATALOGUE_AVANTAGES, combien
+        )
+    ]
+
+
+def _avantages_verses(
+    ressources: list[dict[str, Any]],
+    contrats: list[dict[str, Any]],
+    graine: int,
+) -> list[dict[str, Any]]:
+    """L'onglet « Avantages versés » — une ligne par versement, datée.
+
+    ┌─ C'EST ICI QUE VIT LE VARIABLE ────────────────────────────────────────┐
+    │ Relevé en production le 2026-09-10 : `GET /resources/{id}/advantages`   │
+    │ rend 200 et `meta.totals.rows` = 54 sur une ressource, avec un          │
+    │ historique 2020 → 2026. On y lit « Prime sur lettre d'Objectifs »,      │
+    │ « Prime exceptionnelle », « Prime de vacances ».                        │
+    │                                                                         │
+    │ Trois propriétés que le jeu de données REPRODUIT, parce qu'elles        │
+    │ décident de la stratégie d'un consommateur :                            │
+    │   1. ÉPARSE — six ressources sur huit n'ont aucune ligne. C'est le cas  │
+    │      normal, pas le cas dégradé.                                        │
+    │   2. TRÈS INÉGALE — une poignée de personnes concentre des dizaines de  │
+    │      lignes. Un jeu uniforme cacherait le coût de la pagination.        │
+    │   3. RATTACHÉE AU CONTRAT en vigueur À LA DATE du versement, pas au     │
+    │      contrat courant : une personne peut en avoir huit successifs, et   │
+    │      un versement de 2020 ne se rattache pas au contrat de 2026.        │
+    └─────────────────────────────────────────────────────────────────────────┘
+
+    Pas d'`updateDate` : le fournisseur n'en rend pas, donc aucun curseur n'est
+    possible. Le servir ici inviterait à bâtir une extraction incrémentale qui
+    ne rapatrierait rien en production.
+    """
+    # Flux DÉDIÉ — cf. l'encadré de `DECALAGE_AVANTAGES` : tirer dans le flux
+    # partagé décalerait tout ce qui est généré ensuite.
+    rng = random.Random(graine * DECALAGE_AVANTAGES + 7)
+
+    par_ressource: dict[str, list[dict[str, Any]]] = {}
+    for contrat in contrats:
+        rid = contrat["relationships"]["dependsOn"]["data"]["id"]
+        par_ressource.setdefault(rid, []).append(contrat)
+
+    # ┌─ CHAQUE AGENCE PORTE DES VERSEMENTS, PAR CONSTRUCTION ─────────────────┐
+    # │ Le tirage était `ident % 3 == 0`, et il a vidé toute l'agence de        │
+    # │ Nantes (7, 14, 28) — cf. l'encadré de `_types_avantages`. On force donc │
+    # │ au moins un bénéficiaire par agence AVANT le tirage aléatoire : la      │
+    # │ couverture d'un axe métier ne se laisse pas au hasard.                  │
+    # └─────────────────────────────────────────────────────────────────────────┘
+    # Le TÉMOIN : la ressource au long historique, analogue de la fiche 583 en
+    # production (54 versements, 2020 → 2026). C'est elle qui éprouve la
+    # pagination chez le consommateur — un tirage aléatoire ne doit pas
+    # pouvoir la faire disparaître.
+    obligatoires: set[str] = {"3"}
+    agences_couvertes: set[str] = set()
+    for res in ressources:
+        if not par_ressource.get(res["id"]):
+            continue
+        agence = ((res["relationships"].get("agency") or {}).get("data") or {}).get("id")
+        if agence is not None and agence not in agences_couvertes:
+            agences_couvertes.add(agence)
+            obligatoires.add(res["id"])
+
+    avantages: list[dict[str, Any]] = []
+    suivant = 9000
+    for res in ressources:
+        rid = res["id"]
+        siens = par_ressource.get(rid) or []
+        if not siens:
+            continue
+        ident = int(rid)
+        # Un tiers environ reçoit quelque chose, plus les obligatoires. Le
+        # témoin — la ressource 3 — en concentre plusieurs dizaines, comme la
+        # fiche 583 en production.
+        if rid not in obligatoires and rng.random() >= 0.35:
+            continue
+        combien = 42 if ident == 3 else rng.randint(1, 6)
+
+        for _ in range(combien):
+            porteur = rng.choice(siens)
+            debut = date.fromisoformat(porteur["attributes"]["startDate"])
+            fin_txt = porteur["attributes"]["endDate"]
+            fin = date.fromisoformat(fin_txt) if fin_txt else AUJOURDHUI
+            if fin <= debut:
+                continue
+            # Versé PENDANT le contrat porteur : c'est ce qui rend la relation
+            # `contract` vérifiable plutôt que décorative.
+            verse = debut + timedelta(days=rng.randint(0, (fin - debut).days))
+            reference, nom, _freq, _cat, _p, employe, _a = rng.choice(CATALOGUE_AVANTAGES)
+            quantite = rng.choice([1, 1, 1, 1, 15, 20, 21, 23])
+            suivant += 1
+            avantages.append(
+                {
+                    "id": str(suivant),
+                    "type": "advantage",
+                    "attributes": {
+                        "date": _d(verse),
+                        "quantity": quantite,
+                        "costPaid": round(employe * quantite, 2),
+                        # Vide sur tout l'échantillon de production.
+                        "returnDate": "",
+                        "currency": 0,
+                        "currencyAgency": 0,
+                        "exchangeRate": 1,
+                        "exchangeRateAgency": 1,
+                        "canReadAdvantage": True,
+                        "canWriteAdvantage": True,
+                        "advantageType": {"reference": reference, "name": nom},
+                    },
+                    "relationships": {
+                        "contract": _rel("contract", int(porteur["id"])),
+                        "agency": res["relationships"]["agency"],
+                    },
+                }
+            )
+    return avantages
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2793,7 +3041,7 @@ def build_realiste_dataset(seed: int = 42) -> dict[str, Any]:
     roles = _roles()
     ressources = _ressources(rng)
     business_units = _business_units(ressources)
-    contrats = _contrats(ressources, rng)
+    contrats = _contrats(ressources, rng, seed)
     candidats = _candidats(rng)
     societes = _societes(rng)
     contacts = _contacts(societes, rng)
@@ -2849,6 +3097,9 @@ def build_realiste_dataset(seed: int = 42) -> dict[str, Any]:
     return {
         "absences": absences,
         "actions": actions,
+        # Les avantages VERSÉS : le variable, les primes, les avantages en
+        # nature réellement payés. Indexés par RESSOURCE, comme la route.
+        "advantages": _avantages_verses(ressources, contrats, seed),
         "agencies": agences,
         "banking_accounts": comptes,
         "banking_connections": connexions,

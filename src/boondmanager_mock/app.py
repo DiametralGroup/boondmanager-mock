@@ -53,6 +53,7 @@ from .models import (
     ActionCrm,
     AdministratifRessource,
     Agence,
+    AvantageVerse,
     Candidat,
     Commande,
     Contact,
@@ -643,6 +644,62 @@ def administrative(request: Request, item_id: str) -> JSONResponse:
     }
     included = construire_included([item], state.dataset, "administrative", state.index_entites())
     return JSONResponse(envelope_detail(item, included))
+
+
+@api.get(
+    "/resources/{item_id}/advantages",
+    response_model=ListEnvelope[AvantageVerse],
+    responses=REPONSES_ERREUR,
+    summary="Avantages versés — where variable pay actually lives",
+)
+def advantages(request: Request, item_id: str) -> JSONResponse:
+    """`GET /resources/{id}/advantages` — OBSERVED live 2026-09-10.
+
+    The « Avantages versés » tab: one row per payment, dated, with its type,
+    quantity and cost. Probed on a production tenant: 200 OK, `meta.totals.rows`
+    = 54 on one resource, history running 2020 → 2026, carrying « Prime sur
+    lettre d'Objectifs », « Prime exceptionnelle » and « Prime de vacances ».
+
+    Four measured properties this route reproduces, because each one changes
+    what a consumer must do:
+
+    * **no `updateDate`** — no cursor exists, so no incremental path. Serving
+      one would invite an extraction that fetches nothing in production.
+    * **no bulk collection** — `/advantages` answers 403 (WAF),
+      `/resources-advantages` and `/contracts-advantages` 404. One call per
+      resource, and that cost is structural.
+    * **sparse** — six of eight resources probed had none at all. An empty
+      `data` with `totals.rows: 0` is the NORMAL answer here.
+    * **`contract` relationship** — a payment belongs to the contract in force
+      on its date, not to the current one. One person had eight successive
+      contracts and 54 payments spread across them.
+    """
+    if (
+        injected := _dispatch_injections("/api/resources/advantages", dict(request.query_params))
+    ) is not None:
+        return injected
+    if (denied := _check_auth(request)) is not None:
+        return denied
+    if "advantages" in state.fail_collections:
+        return error(500, "mock: simulated outage on /resources/{id}/advantages")
+    if not any(r["id"] == item_id for r in _collection_items("resources")):
+        return error(404, request=request)
+
+    siens = [
+        a
+        for a in state.dataset["advantages"]
+        if a["relationships"]["contract"]["data"] is not None
+        and a["relationships"]["contract"]["data"]["id"] in {c["id"] for c in _contrats_de(item_id)}
+    ]
+    # Tri stable : sans lui, deux appels identiques peuvent rendre des pages
+    # différentes, et un consommateur qui pagine saute des lignes.
+    siens.sort(key=lambda a: (a["attributes"]["date"], int(a["id"])))
+
+    tranche = paginate(siens, dict(request.query_params))
+    if tranche is None:
+        return error(422, request=request)
+    page, _numero, _taille = tranche
+    return JSONResponse(envelope(page, len(siens)))
 
 
 @api.get(

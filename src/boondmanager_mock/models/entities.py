@@ -226,10 +226,51 @@ class EvaluationCandidat(Permissif):
 
 
 class DetailFraisContrat(Permissif):
+    """⚠️ SERVI, JAMAIS RENSEIGNÉ — measured 2026-09-10, 0 of 18 contracts.
+
+    The key IS emitted on the contract profile; the array is always empty on
+    the tenant probed. The mock filled it on 38 of 38 contracts, which made it
+    the most believable kind of fiction: a consumer building on it was green in
+    CI and would have found an empty column in production. Same family as
+    `isDeleted`. The model stays — the vendor does serve the key — the dataset
+    no longer fills it.
+    """
+
     id: str
     expenseType: dict[str, Any] = Field(default_factory=dict)
     periodicity: str = Field(default="monthly", description="daily | monthly")
     netAmount: float = 0.0
+
+
+class TypeAvantageContrat(Permissif):
+    """A contractual benefit entitlement — shape OBSERVED 2026-09-10.
+
+    Filled on 16 of 18 probed contracts, 55 lines. The mock used to serve
+    `advantageTypes` as an always-empty array, so this shape had never been
+    seen: it is NOT the `DetailFraisContrat` shape it was assumed to share.
+
+    Three traps a consumer must know, all measured:
+
+    * `reference` is NOT a global code. The same `21` is « Health Insurance »
+      on one contract and « Variable » on another; `5` is « Life Insurance »
+      here and « Lunch allowance » there. It is agency configuration.
+    * `category` does NOT say what is vested. « Variable » is `fixedAmount`
+      while « Prime de vacances » is `variableSalaryBasis`; it describes how
+      the amount is expressed, not whether it is owed.
+    * none of the three quotas is « the amount ». Depending on the line only
+      the employee one is set, or employee + agency, or participation +
+      employee. The amount actually PAID lives on `/resources/{id}/advantages`.
+    """
+
+    reference: int | None = None
+    name: str | None = None
+    frequency: str | None = Field(default=None, description="daily | monthly | semiAnnual | annual")
+    category: str | None = Field(
+        default=None, description="variableSalaryBasis | package | fixedAmount"
+    )
+    participationQuota: float | None = None
+    employeeQuota: float | None = None
+    agencyQuota: float | None = None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -914,8 +955,17 @@ class AttributsContrat(AttributsBase):
     numberOfWorkingDays: float | None = None
     chargeFactor: float | None = None
     expensesDetails: list[DetailFraisContrat] = Field(default_factory=list)
-    advantageTypes: list[dict[str, Any]] = Field(default_factory=list)
+    advantageTypes: list[TypeAvantageContrat] = Field(default_factory=list)
     informationComments: str | None = None
+    # ── OBSERVED 2026-09-10, and previously listed as « never observed » ─────
+    # UNVERIFIED-FIELDS put these three in the « documented in the RAML, never
+    # returned » matrix. They ARE returned by the tenant probed: probationEndDate
+    # on 12 of 18 contracts, renewalProbationEndDate on the same 12,
+    # contractAverageDailyProductionCost on 1. Emission is SPARSE — the key is
+    # absent item by item, not null — so the mock omits them the same way.
+    probationEndDate: str | None = None
+    renewalProbationEndDate: str | None = None
+    contractAverageDailyProductionCost: float | None = None
     currency: int | None = None
     currencyAgency: int | None = None
     exchangeRate: float | None = None
@@ -931,6 +981,50 @@ class Contrat(Permissif):
     type: str = "contract"
     attributes: AttributsContrat
     relationships: RelationsContrat | None = None
+
+
+class RelationsAvantageVerse(Permissif):
+    contract: Relation | None = Field(
+        default=None, description="The contract the advantage was paid under."
+    )
+    agency: Relation | None = None
+
+
+class AttributsAvantageVerse(Permissif):
+    """A benefit actually PAID — shape OBSERVED on `/resources/{id}/advantages`.
+
+    Probed 2026-09-10: 200 OK, `meta.totals.rows` = 54 on one resource, history
+    running 2020 → 2026. This is the « Avantages versés » tab, and it is where
+    the variable pay lives — « Prime sur lettre d'Objectifs », « Prime
+    exceptionnelle », « Prime de vacances ».
+
+    No `updateDate`: there is no cursor, consumers refresh in full. And no bulk
+    collection — `/advantages` answers 403, `/resources-advantages` and
+    `/contracts-advantages` 404 — so it costs one call per resource.
+
+    SPARSE by nature: six of eight resources probed had none at all.
+    """
+
+    date: str | None = None
+    quantity: float | None = None
+    costPaid: float | None = None
+    returnDate: str | None = None
+    currency: int | None = None
+    currencyAgency: int | None = None
+    exchangeRate: float | None = None
+    exchangeRateAgency: float | None = None
+    canReadAdvantage: bool | None = None
+    canWriteAdvantage: bool | None = None
+    advantageType: dict[str, Any] = Field(
+        default_factory=dict, description="{reference, name} — instance configuration."
+    )
+
+
+class AvantageVerse(Permissif):
+    id: str
+    type: str = "advantage"
+    attributes: AttributsAvantageVerse
+    relationships: RelationsAvantageVerse | None = None
 
 
 # ═════════════════════════════════════════════════════════════════════════════

@@ -30,6 +30,14 @@ Since v0.3.0 the reference is TWOFOLD, and observation wins:
    [`docs/comparisons/`](comparisons/)). The 2026-07-31 report shows **zero
    structural difference** across the 19 comparable modules, the error dialect
    and the four profile endpoints.
+
+   ⚠️ « Zero structural difference » meant *the shapes match where both sides
+   emit something*. It did NOT mean the VALUES match, and that gap cost a
+   consumer real time: `advantageTypes` was compared as an empty array against
+   an empty array and passed, while the vendor fills it on 16 contracts out of
+   18. A field the mock always leaves empty is a field nobody has ever seen.
+   The 2026-09-10 probe exists because of that blind spot —
+   [comparisons/2026-09-10.md](comparisons/2026-09-10.md).
 2. **Documented in the official RAML** (https://doc.boondmanager.com/api-externe/,
    `raml-build/`) — used where the real API showed nothing (module empty on
    the tenant, permissions).
@@ -87,7 +95,7 @@ owner token) — the mock no longer emits them:
 | companies | `numberbOfActiveOpportunity` (documented typo field, never served) |
 | resources (search) | `icSince`, `icStatus` — the bench is read through `availability: "immediate"` |
 | orders | `billableItemTypes`, `requestTimesheetsSignature` |
-| contracts (profile) | `probationEndDate`, `renewalProbationEndDate`, `exceptionalScales`, `contractAverageDailyProductionCost`, `forceContractAverageDailyProductionCost` |
+| contracts (profile) | `exceptionalScales`, `forceContractAverageDailyProductionCost` — **corrected 2026-09-10**: `probationEndDate` (12/18), `renewalProbationEndDate` (12/18) and `contractAverageDailyProductionCost` (1/18) ARE returned, sparsely. See [comparisons/2026-09-10.md](comparisons/2026-09-10.md) |
 | times | `endDate`, `updateDate` |
 | absences, roles, times-reports, agencies, poles, business-units, banking-transactions, expenses | `updateDate` |
 
@@ -98,6 +106,8 @@ Gaps the mock KEEPS deliberately (tolerated by `compare_real.py`):
 | `orders.updateDate` | **SETTLED on 2026-08-12 — the mock no longer emits it.** The RAML documents it and the official `period=updated` cursor on orders needs it, yet two probes eleven days apart found it absent from the tenant. The « version? » hypothesis of 2026-08-01 does not hold: it is the only one of the eighteen collections to lack the field, and the mock now matches. Consumers must extract `/orders` in full refresh. |
 | `orders.creationDate` | **SETTLED on 2026-08-12 — no longer emitted either.** 0.6.0 kept it on the grounds that « it drives no extraction strategy, so serving it costs nothing ». That was wrong: a model which READS a column needs the column to EXIST, and `stg_commande` broke on « column o.creation_date does not exist » on the very next run. There is no such thing as a harmless invented field. `date` (the order date) IS returned by the vendor and stays. |
 | `expenses`: `row`, `numberOfKilometers`, `delivery`, `project` always emitted | the real API OMITS empty keys item by item (sparse emission); the mock emits the full RAML shape whenever the value exists |
+| `expensesDetails`, `dailyExpenses`, `monthlyExpenses`, `calendar`, `activityRate` | **SETTLED on 2026-09-10 — the mock no longer fills them.** All five are SERVED by the vendor and filled on **0 of 18** contracts. The mock filled all five (38/38, « Titres restaurant », `calendar: "Standard"`, `activityRate: 100`). `activityRate` had already cost a consumer 800 salary rows at zero; `expensesDetails` was on course to repeat it. The keys stay emitted, with the vendor's value: empty. |
+| `contractAverageDailyCost` derivable from the gross | **SETTLED on 2026-09-10 — the mock no longer makes it derivable.** It served `monthlySalary * 12 * chargeFactor / numberOfWorkingDays`. Of 25 production contracts, **1** verifies within 1 % and 24 do not (median error 11.7 %, worst 44.2 %). A relation that holds in the mock and not at the vendor is worse than a missing field: every value looks right, and the consumer recomputes instead of reading. |
 | `isDeleted` | mock affordance, **no longer in the default payload** (see below) |
 | `/actions` ignores `maxResults` | reproduced since 0.6.0 — see below |
 | `candidates.availability` as an integer code | reproduced since 0.6.0 — see below |

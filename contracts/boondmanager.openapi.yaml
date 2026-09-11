@@ -2171,6 +2171,79 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /api/resources/{item_id}/advantages:
+    get:
+      summary: Avantages versés — where variable pay actually lives
+      description: "`GET /resources/{id}/advantages` — OBSERVED live 2026-09-10.\n\
+        \nThe « Avantages versés » tab: one row per payment, dated, with its type,\n\
+        quantity and cost. Probed on a production tenant: 200 OK, `meta.totals.rows`\n\
+        = 54 on one resource, history running 2020 → 2026, carrying « Prime sur\n\
+        lettre d'Objectifs », « Prime exceptionnelle » and « Prime de vacances ».\n\
+        \nFour measured properties this route reproduces, because each one changes\n\
+        what a consumer must do:\n\n* **no `updateDate`** — no cursor exists, so no\
+        \ incremental path. Serving\n  one would invite an extraction that fetches\
+        \ nothing in production.\n* **no bulk collection** — `/advantages` answers\
+        \ 403 (WAF),\n  `/resources-advantages` and `/contracts-advantages` 404. One\
+        \ call per\n  resource, and that cost is structural.\n* **sparse** — six of\
+        \ eight resources probed had none at all. An empty\n  `data` with `totals.rows:\
+        \ 0` is the NORMAL answer here.\n* **`contract` relationship** — a payment\
+        \ belongs to the contract in force\n  on its date, not to the current one.\
+        \ One person had eight successive\n  contracts and 54 payments spread across\
+        \ them."
+      operationId: advantages_api_resources__item_id__advantages_get
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListEnvelope_AvantageVerse_'
+        '401':
+          description: No credentials provided.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Unknown entity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Token present but invalid, missing required parameter (business
+            code 1017), or unreadable pagination parameter. **422, not 401** — that
+            is what the real API does, and the status code is what retry logic keys
+            on.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Rate limit reached. `Retry-After` header in seconds.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Injected failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Injected transient failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /api/resources/{item_id}/technical-data:
     get:
       summary: Résumé tab — the real profile shape (type `resource`)
@@ -2863,6 +2936,86 @@ components:
       required:
       - name
       title: AttributsAgence
+    AttributsAvantageVerse:
+      properties:
+        date:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Date
+        quantity:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Quantity
+        costPaid:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Costpaid
+        returnDate:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Returndate
+        currency:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Currency
+        currencyAgency:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Currencyagency
+        exchangeRate:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Exchangerate
+        exchangeRateAgency:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Exchangerateagency
+        canReadAdvantage:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Canreadadvantage
+        canWriteAdvantage:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Canwriteadvantage
+        advantageType:
+          additionalProperties: true
+          type: object
+          title: Advantagetype
+          description: '{reference, name} — instance configuration.'
+      additionalProperties: true
+      type: object
+      title: AttributsAvantageVerse
+      description: 'A benefit actually PAID — shape OBSERVED on `/resources/{id}/advantages`.
+
+
+        Probed 2026-09-10: 200 OK, `meta.totals.rows` = 54 on one resource, history
+
+        running 2020 → 2026. This is the « Avantages versés » tab, and it is where
+
+        the variable pay lives — « Prime sur lettre d''Objectifs », « Prime
+
+        exceptionnelle », « Prime de vacances ».
+
+
+        No `updateDate`: there is no cursor, consumers refresh in full. And no bulk
+
+        collection — `/advantages` answers 403, `/resources-advantages` and
+
+        `/contracts-advantages` 404 — so it costs one call per resource.
+
+
+        SPARSE by nature: six of eight resources probed had none at all.'
     AttributsCandidat:
       properties:
         isDeleted:
@@ -3348,8 +3501,7 @@ components:
           title: Expensesdetails
         advantageTypes:
           items:
-            additionalProperties: true
-            type: object
+            $ref: '#/components/schemas/TypeAvantageContrat'
           type: array
           title: Advantagetypes
         informationComments:
@@ -3357,6 +3509,21 @@ components:
           - type: string
           - type: 'null'
           title: Informationcomments
+        probationEndDate:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Probationenddate
+        renewalProbationEndDate:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Renewalprobationenddate
+        contractAverageDailyProductionCost:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Contractaveragedailyproductioncost
         currency:
           anyOf:
           - type: integer
@@ -4915,6 +5082,27 @@ components:
       description: '`GET /application/current-user` — real type `currentuser` (observed),
 
         the attribute subset consumers rely on.'
+    AvantageVerse:
+      properties:
+        id:
+          type: string
+          title: Id
+        type:
+          type: string
+          title: Type
+          default: advantage
+        attributes:
+          $ref: '#/components/schemas/AttributsAvantageVerse'
+        relationships:
+          anyOf:
+          - $ref: '#/components/schemas/RelationsAvantageVerse'
+          - type: 'null'
+      additionalProperties: true
+      type: object
+      required:
+      - id
+      - attributes
+      title: AvantageVerse
     BaremeKilometrique:
       properties:
         reference:
@@ -5061,6 +5249,20 @@ components:
       required:
       - id
       title: DetailFraisContrat
+      description: '⚠️ SERVI, JAMAIS RENSEIGNÉ — measured 2026-09-10, 0 of 18 contracts.
+
+
+        The key IS emitted on the contract profile; the array is always empty on
+
+        the tenant probed. The mock filled it on 38 of 38 contracts, which made it
+
+        the most believable kind of fiction: a consumer building on it was green in
+
+        CI and would have found an empty column in production. Same family as
+
+        `isDeleted`. The model stays — the vendor does serve the key — the dataset
+
+        no longer fills it.'
     DonneesDictionnaire:
       properties:
         setting:
@@ -5815,6 +6017,30 @@ components:
       - data
       - meta
       title: ListEnvelope[Agence]
+    ListEnvelope_AvantageVerse_:
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/AvantageVerse'
+          type: array
+          title: Data
+        included:
+          anyOf:
+          - items:
+              additionalProperties: true
+              type: object
+            type: array
+          - type: 'null'
+          title: Included
+          description: Related entities, reduced per-module shape.
+        meta:
+          $ref: '#/components/schemas/Meta'
+      additionalProperties: true
+      type: object
+      required:
+      - data
+      - meta
+      title: ListEnvelope[AvantageVerse]
     ListEnvelope_Candidat_:
       properties:
         data:
@@ -6714,6 +6940,20 @@ components:
       additionalProperties: true
       type: object
       title: RelationsAdministratif
+    RelationsAvantageVerse:
+      properties:
+        contract:
+          anyOf:
+          - $ref: '#/components/schemas/Relation'
+          - type: 'null'
+          description: The contract the advantage was paid under.
+        agency:
+          anyOf:
+          - $ref: '#/components/schemas/Relation'
+          - type: 'null'
+      additionalProperties: true
+      type: object
+      title: RelationsAvantageVerse
     RelationsCandidat:
       properties:
         mainManager:
@@ -7241,6 +7481,61 @@ components:
       - id
       - attributes
       title: TransactionBancaire
+    TypeAvantageContrat:
+      properties:
+        reference:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Reference
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        frequency:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Frequency
+          description: daily | monthly | semiAnnual | annual
+        category:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Category
+          description: variableSalaryBasis | package | fixedAmount
+        participationQuota:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Participationquota
+        employeeQuota:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Employeequota
+        agencyQuota:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Agencyquota
+      additionalProperties: true
+      type: object
+      title: TypeAvantageContrat
+      description: "A contractual benefit entitlement — shape OBSERVED 2026-09-10.\n\
+        \nFilled on 16 of 18 probed contracts, 55 lines. The mock used to serve\n\
+        `advantageTypes` as an always-empty array, so this shape had never been\n\
+        seen: it is NOT the `DetailFraisContrat` shape it was assumed to share.\n\n\
+        Three traps a consumer must know, all measured:\n\n* `reference` is NOT a\
+        \ global code. The same `21` is « Health Insurance »\n  on one contract and\
+        \ « Variable » on another; `5` is « Life Insurance »\n  here and « Lunch allowance\
+        \ » there. It is agency configuration.\n* `category` does NOT say what is\
+        \ vested. « Variable » is `fixedAmount`\n  while « Prime de vacances » is\
+        \ `variableSalaryBasis`; it describes how\n  the amount is expressed, not\
+        \ whether it is owed.\n* none of the three quotas is « the amount ». Depending\
+        \ on the line only\n  the employee one is set, or employee + agency, or participation\
+        \ +\n  employee. The amount actually PAID lives on `/resources/{id}/advantages`."
     TypeFrais:
       properties:
         reference:

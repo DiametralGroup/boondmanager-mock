@@ -887,11 +887,43 @@ def _contrat(
     # │ l'identifiant) et suffisant pour casser la formule.                       │
     # └──────────────────────────────────────────────────────────────────────────┘
     cout_jour = round(mensuel * 12 * 1.47 / 218 * (0.88 + (ident * 37 % 45) / 100), 2)
+    # ┌─ L'AGENCE DU CONTRAT N'EST PAS TOUJOURS CELLE DE LA FICHE ──────────────┐
+    # │ C'est ainsi que BoondManager exprime le MULTI-RATTACHEMENT : une        │
+    # │ personne peut avoir des contrats dans plusieurs agences, avec des rôles │
+    # │ différents. La fiche ne porte que l'agence de rattachement principal.   │
+    # │                                                                          │
+    # │ Mesuré le 2026-09-11 sur un tenant de production, 70 fiches             │
+    # │ multi-contrats et 388 contrats : 18 (4,6 %) portent une agence          │
+    # │ différente de celle de leur fiche, et 3 personnes ont des contrats sur   │
+    # │ plusieurs agences — dont le dirigeant, réparti sur trois entités.       │
+    # │                                                                          │
+    # │ Le jeu donnait à CHAQUE contrat l'agence de sa ressource. Un            │
+    # │ consommateur qui prend l'entité sur la fiche était donc vert ici et     │
+    # │ rattachait 4,6 % des contrats au mauvais périmètre en production —      │
+    # │ lisibles par les uns, invisibles des autres. C'est arrivé.              │
+    # │                                                                          │
+    # │ Le décalage est DÉTERMINISTE (dérivé de l'identifiant) et minoritaire.  │
+    # │                                                                          │
+    # │ ⚠️ IL EST PLUS DENSE QUE LE RÉEL, ET C'EST ASSUMÉ : 6 contrats sur 38   │
+    # │    (15,8 %) contre 4,6 % en production. Sur un jeu de 38 contrats, la   │
+    # │    proportion réelle donnerait une ou deux lignes — trop peu pour qu'un │
+    # │    consommateur rencontre le cas, et une fixture qui ne porte pas le    │
+    # │    cas rend vert par vacuité. La FORME est fidèle, la fréquence non.    │
+    # │                                                                          │
+    # │ `test_ecarts_mesures_en_production` le verrouille.                       │
+    # └──────────────────────────────────────────────────────────────────────────┘
+    agence_fiche = res["relationships"]["agency"]
+    autre = (ident * 7) % 6 + 1
+    agence_contrat = (
+        _rel("agency", autre)
+        if ident % 5 == 0 and str(autre) != (agence_fiche.get("data") or {}).get("id")
+        else agence_fiche
+    )
     # Le réel émet TOUJOURS les clés parentContract/childContract (data null).
     rels: dict[str, Any] = {
         "dependsOn": _rel("resource", res["id"]),
         "createdBy": _rel("resource", 4),
-        "agency": res["relationships"]["agency"],
+        "agency": agence_contrat,
         "parentContract": _rel("contract", parent),
         "childContract": _rel("contract", enfant),
         "files": {"data": []},

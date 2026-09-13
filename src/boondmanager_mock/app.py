@@ -63,6 +63,7 @@ from .models import (
     EnveloppeDictionnaire,
     Facture,
     Frais,
+    InformationSociete,
     ItemEnvelope,
     ListEnvelope,
     Mission,
@@ -643,6 +644,116 @@ def administrative(request: Request, item_id: str) -> JSONResponse:
         "relationships": relations,
     }
     included = construire_included([item], state.dataset, "administrative", state.index_entites())
+    return JSONResponse(envelope_detail(item, included))
+
+
+#: Formes juridiques et codes APE — valeurs PLAUSIBLES, déterministes par id :
+#: seuls les NOMS de ces attributs ont été observés (cf. UNVERIFIED-FIELDS).
+_FORMES_JURIDIQUES = ("SAS", "SA", "SARL", "SE")
+_CODES_APE = ("6202A", "6420Z", "3514Z", "6512Z", "4941A", "2120Z", "4939B")
+_CODES_POSTAUX = {
+    "Paris": "75008",
+    "Lyon": "69003",
+    "Nantes": "44000",
+    "Lille": "59000",
+    "Bordeaux": "33000",
+    "Bruxelles": "1000",
+}
+
+
+def _ref_societe(societe_id: str | None) -> dict[str, str] | None:
+    return {"id": societe_id, "type": "company"} if societe_id else None
+
+
+@api.get(
+    "/companies/{item_id}/information",
+    response_model=ItemEnvelope[InformationSociete],
+    responses=REPONSES_ERREUR,
+    summary="Information tab — THE only place the company group lives",
+)
+def company_information(request: Request, item_id: str) -> JSONResponse:
+    """`GET /companies/{id}/information` — OBSERVED live 2026-09-13.
+
+    Read-only probe on a production tenant, field NAMES only (no values):
+
+    * **the group lives here and nowhere else** — `GET /companies` and
+      `GET /companies/{id}` only carry `agency`, `mainManager`, `pole`. This
+      tab adds `createdBy`, `files`, `influencers`, `parentCompany` and
+      `subsidiaries` (eight relationships in all).
+    * **`parentCompany`** is `data: null` or `{id, type: "company"}` — set on
+      about 6 of 20 sampled companies.
+    * **`subsidiaries`** is a LIST of `{id, type: "company"}`, empty when the
+      company has none. Both directions are CONSISTENT: one group listed 16
+      subsidiaries, each pointing back to it. The mock derives `subsidiaries`
+      from `parentCompany` so the property holds by construction.
+    * **27 attributes**; `included` carries types `agency`, `company`,
+      `resource`. Attribute types beyond those of the search are NOT observed
+      (`x-boond-confidence: unverified`).
+    """
+    if (
+        injected := _dispatch_injections("/api/companies/information", dict(request.query_params))
+    ) is not None:
+        return injected
+    if (denied := _check_auth(request)) is not None:
+        return denied
+    if "information" in state.fail_collections:
+        return error(500, "mock: simulated outage on /companies/{id}/information")
+    societe = next((s for s in _collection_items("companies") if s["id"] == item_id), None)
+    if societe is None:
+        return error(404, request=request)
+
+    cid = int(item_id)
+    attrs = societe["attributes"]
+    rels = societe.get("relationships") or {}
+    meres: dict[str, str] = state.dataset.get("company_parents", {})
+    filiales = sorted((f for f, m in meres.items() if m == item_id), key=int)
+
+    item = {
+        "id": item_id,
+        "type": "company",
+        "attributes": {
+            "address": f"{1 + (cid * 17) % 120} avenue des Entreprises",
+            "apeCode": _CODES_APE[cid % len(_CODES_APE)],
+            "billingDetails": [],
+            "country": attrs.get("country"),
+            "creationDate": attrs.get("creationDate"),
+            "creationSource": None,
+            "departments": [],
+            "expertiseArea": attrs.get("expertiseArea"),
+            "fax": "",
+            "informationComments": attrs.get("informationComments", ""),
+            "legalStatus": _FORMES_JURIDIQUES[cid % len(_FORMES_JURIDIQUES)],
+            "name": attrs["name"],
+            "number": f"CLI-{cid:05d}",
+            "origin": {"typeOf": 0, "detail": ""},
+            "phone1": attrs.get("phone1"),
+            "postcode": _CODES_POSTAUX.get(attrs.get("town", ""), ""),
+            "registeredOffice": True,
+            "registrationNumber": f"{400000000 + cid * 7919:09d}",
+            "socialNetworks": attrs.get("socialNetworks", []),
+            "staff": 50 * (1 + (cid * 13) % 40),
+            "state": attrs.get("state"),
+            "subDivision": "",
+            "thumbnail": attrs.get("thumbnail", ""),
+            "town": attrs.get("town"),
+            "updateDate": attrs.get("updateDate"),
+            "vatNumber": f"FR{(cid * 37) % 100:02d}{400000000 + cid * 7919:09d}",
+            "website": attrs.get("website"),
+        },
+        "relationships": {
+            "agency": rels.get("agency", {"data": None}),
+            "createdBy": rels.get("mainManager", {"data": None}),
+            "files": {"data": []},
+            "influencers": {"data": []},
+            "mainManager": rels.get("mainManager", {"data": None}),
+            "parentCompany": {"data": _ref_societe(meres.get(item_id))},
+            "pole": rels.get("pole", {"data": None}),
+            "subsidiaries": {"data": [_ref_societe(f) for f in filiales]},
+        },
+    }
+    included = construire_included(
+        [item], state.dataset, "companies/information", state.index_entites()
+    )
     return JSONResponse(envelope_detail(item, included))
 
 

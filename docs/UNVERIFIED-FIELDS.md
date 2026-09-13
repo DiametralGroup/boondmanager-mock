@@ -206,6 +206,45 @@ profile projection VERIFIED against the real API. The other profile endpoints
 (`/invoices/{id}`, `/candidates/{id}`…) serve the search shape — verify them
 if a consumer starts relying on them.
 
+### 5.b `companies/{id}/information` — names observed, types NOT observed
+
+Probed read-only on a production tenant on 2026-09-13, **field names only**.
+The route, `data.type = "company"`, its eight relationships and the `included`
+types (`agency`, `company`, `resource`) are attested. So is the group
+linkage: `parentCompany` is `null` or `{id, type: "company"}` (set on ~6 of 20
+sampled companies), `subsidiaries` a list of `{id, type: "company"}`, and both
+directions agree (one group listed 16 subsidiaries, each pointing back). Neither
+`GET /companies` nor `GET /companies/{id}` serves either relationship.
+
+The 27 attribute NAMES are attested. Those the search already serves keep the
+search types (`name`, `expertiseArea`, `state`, `informationComments`,
+`thumbnail`, `website`, `phone1`, `town`, `country`, `creationDate`,
+`updateDate`, `socialNetworks`). The fifteen below carry
+`x-boond-confidence: unverified` — the TYPE and the VALUE served are guesses:
+
+| Attribute | Type served by the mock | Value served |
+|---|---|---|
+| `address` | string | synthetic street |
+| `apeCode` | string | plausible NAF code |
+| `billingDetails` | array of objects | always `[]` |
+| `creationSource` | string or null | always `null` |
+| `departments` | array of strings | always `[]` |
+| `fax` | string | always `""` |
+| `legalStatus` | string | `SAS`, `SA`, `SARL`, `SE` |
+| `number` | string | `CLI-000NN` |
+| `origin` | `{typeOf, detail}` (shape borrowed from opportunities) | `{typeOf: 0, detail: ""}` |
+| `postcode` | string | derived from the town |
+| `registeredOffice` | boolean | always `true` |
+| `registrationNumber` | string | synthetic 9-digit SIREN |
+| `staff` | integer | synthetic |
+| `subDivision` | string | always `""` |
+| `vatNumber` | string | synthetic FR VAT number |
+
+⚠️ Empty-by-default fields (`billingDetails`, `departments`, `fax`,
+`subDivision`) have never been SEEN filled: the exact trap `advantageTypes`
+set. To lift the doubt: a probe sampling VALUES on a few company information
+tabs, then align types and fill rates.
+
 ### 6. Synthetic civil status
 
 `dateOfBirth`, `nationality`, seniority… in the administrative tab and the

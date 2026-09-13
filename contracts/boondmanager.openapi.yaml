@@ -2171,6 +2171,76 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /api/companies/{item_id}/information:
+    get:
+      summary: Information tab — THE only place the company group lives
+      description: "`GET /companies/{id}/information` — OBSERVED live 2026-09-13.\n\
+        \nRead-only probe on a production tenant, field NAMES only (no values):\n\n\
+        * **the group lives here and nowhere else** — `GET /companies` and\n  `GET\
+        \ /companies/{id}` only carry `agency`, `mainManager`, `pole`. This\n  tab\
+        \ adds `createdBy`, `files`, `influencers`, `parentCompany` and\n  `subsidiaries`\
+        \ (eight relationships in all).\n* **`parentCompany`** is `data: null` or\
+        \ `{id, type: \"company\"}` — set on\n  about 6 of 20 sampled companies.\n\
+        * **`subsidiaries`** is a LIST of `{id, type: \"company\"}`, empty when the\n\
+        \  company has none. Both directions are CONSISTENT: one group listed 16\n\
+        \  subsidiaries, each pointing back to it. The mock derives `subsidiaries`\n\
+        \  from `parentCompany` so the property holds by construction.\n* **27 attributes**;\
+        \ `included` carries types `agency`, `company`,\n  `resource`. Attribute types\
+        \ beyond those of the search are NOT observed\n  (`x-boond-confidence: unverified`)."
+      operationId: company_information_api_companies__item_id__information_get
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemEnvelope_InformationSociete_'
+        '401':
+          description: No credentials provided.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Unknown entity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Token present but invalid, missing required parameter (business
+            code 1017), or unreadable pagination parameter. **422, not 401** — that
+            is what the real API does, and the status code is what retry logic keys
+            on.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Rate limit reached. `Retry-After` header in seconds.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Injected failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Injected transient failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /api/resources/{item_id}/advantages:
     get:
       summary: Avantages versés — where variable pay actually lives
@@ -3957,6 +4027,217 @@ components:
       type: object
       title: AttributsFrais
       description: 'Like /absences: report, delivery and project EMBEDDED in attributes.'
+    AttributsInformationSociete:
+      properties:
+        address:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Address
+          x-boond-confidence: unverified
+          x-boond-note: '`address` : nom d''attribut OBSERVÉ sur /companies/{id}/information
+            (2026-09-13, noms seulement). Type et valeurs NON observés — ceux du mock
+            sont plausibles, pas attestés.'
+        apeCode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Apecode
+          x-boond-confidence: unverified
+          x-boond-note: '`apeCode` : nom d''attribut OBSERVÉ sur /companies/{id}/information
+            (2026-09-13, noms seulement). Type et valeurs NON observés — ceux du mock
+            sont plausibles, pas attestés.'
+        billingDetails:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Billingdetails
+          x-boond-confidence: unverified
+          x-boond-note: '`billingDetails` : nom d''attribut OBSERVÉ sur /companies/{id}/information
+            (2026-09-13, noms seulement). Type et valeurs NON observés — ceux du mock
+            sont plausibles, pas attestés.'
+        country:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Country
+        creationDate:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Creationdate
+        creationSource:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Creationsource
+          x-boond-confidence: unverified
+          x-boond-note: '`creationSource` : nom d''attribut OBSERVÉ sur /companies/{id}/information
+            (2026-09-13, noms seulement). Type et valeurs NON observés — ceux du mock
+            sont plausibles, pas attestés.'
+        departments:
+          items:
+            type: string
+          type: array
+          title: Departments
+          x-boond-confidence: unverified
+          x-boond-note: '`departments` : nom d''attribut OBSERVÉ sur /companies/{id}/information
+            (2026-09-13, noms seulement). Type et valeurs NON observés — ceux du mock
+            sont plausibles, pas attestés.'
+        expertiseArea:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Expertisearea
+        fax:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Fax
+          x-boond-confidence: unverified
+          x-boond-note: '`fax` : nom d''attribut OBSERVÉ sur /companies/{id}/information
+            (2026-09-13, noms seulement). Type et valeurs NON observés — ceux du mock
+            sont plausibles, pas attestés.'
+        informationComments:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Informationcomments
+        legalStatus:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Legalstatus
+          x-boond-confidence: unverified
+          x-boond-note: '`legalStatus` : nom d''attribut OBSERVÉ sur /companies/{id}/information
+            (2026-09-13, noms seulement). Type et valeurs NON observés — ceux du mock
+            sont plausibles, pas attestés.'
+        name:
+          type: string
+          title: Name
+        number:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Number
+          x-boond-confidence: unverified
+          x-boond-note: '`number` : nom d''attribut OBSERVÉ sur /companies/{id}/information
+            (2026-09-13, noms seulement). Type et valeurs NON observés — ceux du mock
+            sont plausibles, pas attestés.'
+        origin:
+          anyOf:
+          - $ref: '#/components/schemas/SourceOuOrigine'
+          - type: 'null'
+          x-boond-confidence: unverified
+          x-boond-note: '`origin` : nom d''attribut OBSERVÉ sur /companies/{id}/information
+            (2026-09-13, noms seulement). Type et valeurs NON observés — ceux du mock
+            sont plausibles, pas attestés.'
+        phone1:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Phone1
+        postcode:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Postcode
+          x-boond-confidence: unverified
+          x-boond-note: '`postcode` : nom d''attribut OBSERVÉ sur /companies/{id}/information
+            (2026-09-13, noms seulement). Type et valeurs NON observés — ceux du mock
+            sont plausibles, pas attestés.'
+        registeredOffice:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Registeredoffice
+          x-boond-confidence: unverified
+          x-boond-note: '`registeredOffice` : nom d''attribut OBSERVÉ sur /companies/{id}/information
+            (2026-09-13, noms seulement). Type et valeurs NON observés — ceux du mock
+            sont plausibles, pas attestés.'
+        registrationNumber:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Registrationnumber
+          x-boond-confidence: unverified
+          x-boond-note: '`registrationNumber` : nom d''attribut OBSERVÉ sur /companies/{id}/information
+            (2026-09-13, noms seulement). Type et valeurs NON observés — ceux du mock
+            sont plausibles, pas attestés.'
+        socialNetworks:
+          items:
+            $ref: '#/components/schemas/ReseauSocial'
+          type: array
+          title: Socialnetworks
+        staff:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Staff
+          x-boond-confidence: unverified
+          x-boond-note: '`staff` : nom d''attribut OBSERVÉ sur /companies/{id}/information
+            (2026-09-13, noms seulement). Type et valeurs NON observés — ceux du mock
+            sont plausibles, pas attestés.'
+        state:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: State
+        subDivision:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Subdivision
+          x-boond-confidence: unverified
+          x-boond-note: '`subDivision` : nom d''attribut OBSERVÉ sur /companies/{id}/information
+            (2026-09-13, noms seulement). Type et valeurs NON observés — ceux du mock
+            sont plausibles, pas attestés.'
+        thumbnail:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Thumbnail
+        town:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Town
+        updateDate:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Updatedate
+        vatNumber:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Vatnumber
+          x-boond-confidence: unverified
+          x-boond-note: '`vatNumber` : nom d''attribut OBSERVÉ sur /companies/{id}/information
+            (2026-09-13, noms seulement). Type et valeurs NON observés — ceux du mock
+            sont plausibles, pas attestés.'
+        website:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Website
+      additionalProperties: true
+      type: object
+      required:
+      - name
+      title: AttributsInformationSociete
+      description: '`GET /companies/{id}/information` — les VINGT-SEPT attributs relevés
+        en
+
+        réel le 2026-09-13 (type JSON:API `company`).
+
+
+        Seuls les NOMS ont été observés. Les types des attributs déjà servis par la
+
+        recherche (`AttributsSociete`) sont repris ; tous les autres sont marqués
+
+        `unverified` et inscrits dans docs/UNVERIFIED-FIELDS.md.'
     AttributsMission:
       properties:
         isDeleted:
@@ -5423,6 +5704,27 @@ components:
       - id
       - attributes
       title: Frais
+    InformationSociete:
+      properties:
+        id:
+          type: string
+          title: Id
+        type:
+          type: string
+          title: Type
+          default: company
+        attributes:
+          $ref: '#/components/schemas/AttributsInformationSociete'
+        relationships:
+          anyOf:
+          - $ref: '#/components/schemas/RelationsInformationSociete'
+          - type: 'null'
+      additionalProperties: true
+      type: object
+      required:
+      - id
+      - attributes
+      title: InformationSociete
     InviteFrais:
       properties:
         id:
@@ -5676,6 +5978,27 @@ components:
       required:
       - data
       title: ItemEnvelope[Facture]
+    ItemEnvelope_InformationSociete_:
+      properties:
+        data:
+          $ref: '#/components/schemas/InformationSociete'
+        included:
+          anyOf:
+          - items:
+              additionalProperties: true
+              type: object
+            type: array
+          - type: 'null'
+          title: Included
+        meta:
+          anyOf:
+          - $ref: '#/components/schemas/MetaDetail'
+          - type: 'null'
+      additionalProperties: true
+      type: object
+      required:
+      - data
+      title: ItemEnvelope[InformationSociete]
     ItemEnvelope_Mission_:
       properties:
         data:
@@ -7061,6 +7384,76 @@ components:
       additionalProperties: true
       type: object
       title: RelationsFacture
+    RelationsInformationSociete:
+      properties:
+        agency:
+          anyOf:
+          - $ref: '#/components/schemas/Relation'
+          - type: 'null'
+        createdBy:
+          anyOf:
+          - $ref: '#/components/schemas/Relation'
+          - type: 'null'
+        files:
+          anyOf:
+          - $ref: '#/components/schemas/RelationListe'
+          - type: 'null'
+        influencers:
+          anyOf:
+          - $ref: '#/components/schemas/RelationListe'
+          - type: 'null'
+        mainManager:
+          anyOf:
+          - $ref: '#/components/schemas/Relation'
+          - type: 'null'
+        parentCompany:
+          anyOf:
+          - $ref: '#/components/schemas/Relation'
+          - type: 'null'
+          description: 'The group this company belongs to — `data: null` when none.'
+        pole:
+          anyOf:
+          - $ref: '#/components/schemas/Relation'
+          - type: 'null'
+        subsidiaries:
+          anyOf:
+          - $ref: '#/components/schemas/RelationListe'
+          - type: 'null'
+          description: Companies whose `parentCompany` is this one — empty list when
+            none.
+      additionalProperties: true
+      type: object
+      title: RelationsInformationSociete
+      description: 'Les HUIT relations relevées en réel le 2026-09-13 — ni plus, ni
+        moins.
+
+
+        ┌─ LE GROUPE N''EST SERVI QU''ICI ─────────────────────────────────────────────┐
+
+        │ Sonde lecture seule du 2026-09-13 : `GET /companies` (liste) et            │
+
+        │ `GET /companies/{id}` (profil) ne portent QUE `agency`, `mainManager`,     │
+
+        │ `pole`. Le rattachement société → groupe n''existe que sur cet onglet.      │
+
+        │                                                                            │
+
+        │   parentCompany : `null`, ou `{id, type: "company"}` — renseigné sur ~6    │
+
+        │                   fiches sur 20 échantillonnées ;                          │
+
+        │   subsidiaries  : LISTE de `{id, type: "company"}`, vide sans filiale.     │
+
+        │                                                                            │
+
+        │ Les deux sens sont COHÉRENTS en réel : la fiche d''un groupe listait 16     │
+
+        │ filiales, et chacune pointait vers lui par `parentCompany`. Le mock DÉRIVE
+        │
+
+        │ `subsidiaries` de `parentCompany` pour garantir la même propriété.         │
+
+        └────────────────────────────────────────────────────────────────────────────┘'
     RelationsMission:
       properties:
         project:

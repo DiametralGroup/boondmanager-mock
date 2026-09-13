@@ -110,7 +110,10 @@ path to contracts**: `contracts` relationship + `included`, then
 « Avantages versés » tab — **where variable pay lives**: one dated row per
 payment, sparse, no cursor, no bulk collection;
 [comparisons/2026-09-10.md](docs/comparisons/2026-09-10.md)),
-`resources/{id}/technical-data` (the résumé tab) and
+`resources/{id}/technical-data` (the résumé tab),
+`companies/{id}/information` (the company information tab — **the only place
+the group linkage lives**: `parentCompany` + `subsidiaries`, observed
+2026-09-13; neither the search nor the profile carries it) and
 `application/current-user` (credentials smoke test).
 
 ¹ `GET` search does not exist in production (405 observed): the mock replies

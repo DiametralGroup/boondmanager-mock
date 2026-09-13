@@ -301,6 +301,89 @@ def test_administrative_d_un_sous_traitant(client):
     assert fournisseur is not None and fournisseur["type"] == "company"
 
 
+# ── Le rattachement au groupe — onglet information d'une société ────────────
+
+#: Relevé de production du 2026-09-13 (sonde lecture seule, noms seulement).
+RELATIONS_INFORMATION_SOCIETE = {
+    "agency",
+    "createdBy",
+    "files",
+    "influencers",
+    "mainManager",
+    "parentCompany",
+    "pole",
+    "subsidiaries",
+}
+
+
+def test_la_liste_des_societes_ne_porte_pas_le_groupe(client):
+    """Relevé réel : la recherche ne sert que `agency`, `mainManager`, `pole`.
+
+    Y ajouter `parentCompany` rendrait un consommateur vert sur une relation
+    que la liste du fournisseur ne sert pas — il ne découvrirait qu'en
+    production qu'il faut un appel par fiche.
+    """
+    liste = client.get("/api/companies?maxResults=500", headers=JWT).json()
+    for societe in liste["data"]:
+        assert set(societe["relationships"]) == {"agency", "mainManager", "pole"}
+
+
+def test_information_une_filiale_pointe_vers_sa_mere(client):
+    corps = client.get("/api/companies/3/information", headers=JWT).json()
+    assert corps["data"]["type"] == "company"
+    assert corps["data"]["relationships"]["parentCompany"]["data"] == {
+        "id": "9",
+        "type": "company",
+    }
+    assert corps["data"]["relationships"]["subsidiaries"]["data"] == []
+    # La mère référencée est résolue dans `included`.
+    assert ("company", "9") in {(e["type"], e["id"]) for e in corps["included"]}
+
+
+def test_information_la_mere_liste_ses_filiales_et_les_deux_sens_concordent(client):
+    """Mesuré en réel : un groupe listait 16 filiales, chacune pointant vers lui."""
+    mere = client.get("/api/companies/9/information", headers=JWT).json()["data"]
+    assert mere["relationships"]["parentCompany"]["data"] is None
+    filiales = mere["relationships"]["subsidiaries"]["data"]
+    assert {f["id"] for f in filiales} == {"3", "5"}
+    assert all(f["type"] == "company" for f in filiales)
+
+    for filiale in filiales:
+        fiche = client.get(f"/api/companies/{filiale['id']}/information", headers=JWT).json()
+        assert fiche["data"]["relationships"]["parentCompany"]["data"]["id"] == "9"
+
+    # Sens inverse, sur TOUTES les sociétés : toute mère déclarée liste sa fille.
+    ids = [s["id"] for s in client.get("/api/companies?maxResults=500", headers=JWT).json()["data"]]
+    fiches = {
+        i: client.get(f"/api/companies/{i}/information", headers=JWT).json()["data"] for i in ids
+    }
+    for i, fiche in fiches.items():
+        ref = fiche["relationships"]["parentCompany"]["data"]
+        if ref is not None:
+            soeurs = fiches[ref["id"]]["relationships"]["subsidiaries"]["data"]
+            assert {"id": i, "type": "company"} in soeurs
+        for fille in fiche["relationships"]["subsidiaries"]["data"]:
+            assert fiches[fille["id"]]["relationships"]["parentCompany"]["data"]["id"] == i
+
+
+def test_information_d_une_societe_sans_groupe(client):
+    rels = client.get("/api/companies/1/information", headers=JWT).json()["data"]["relationships"]
+    assert rels["parentCompany"] == {"data": None}
+    assert rels["subsidiaries"] == {"data": []}
+
+
+def test_information_forme_relevee_et_404(client):
+    """Les huit relations et les vingt-sept attributs observés — ni plus, ni moins."""
+    corps = client.get("/api/companies/9/information", headers=JWT).json()
+    assert set(corps["data"]["relationships"]) == RELATIONS_INFORMATION_SOCIETE
+    assert len(corps["data"]["attributes"]) == 27
+    assert {e["type"] for e in corps["included"]} <= {"agency", "company", "resource"}
+
+    absent = client.get("/api/companies/999/information", headers=JWT)
+    assert absent.status_code == 404
+    assert absent.json()["errors"][0]["detail"] == "HTTP 404 (GET /api/companies/999/information)"
+
+
 # ── Affordances conservées ───────────────────────────────────────────────────
 
 

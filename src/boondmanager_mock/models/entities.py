@@ -507,6 +507,113 @@ class Societe(Permissif):
     relationships: RelationsSociete | None = None
 
 
+# ── Onglet « information » d'une société — là où vit le rattachement au groupe ─
+
+
+def _type_non_observe(nom: str) -> dict[str, Any]:
+    """Le NOM est relevé en production, le TYPE et la valeur ne le sont pas."""
+    return unverified(
+        f"`{nom}` : nom d'attribut OBSERVÉ sur /companies/{{id}}/information "
+        "(2026-09-13, noms seulement). Type et valeurs NON observés — ceux du "
+        "mock sont plausibles, pas attestés."
+    )
+
+
+class RelationsInformationSociete(Permissif):
+    """Les HUIT relations relevées en réel le 2026-09-13 — ni plus, ni moins.
+
+    ┌─ LE GROUPE N'EST SERVI QU'ICI ─────────────────────────────────────────────┐
+    │ Sonde lecture seule du 2026-09-13 : `GET /companies` (liste) et            │
+    │ `GET /companies/{id}` (profil) ne portent QUE `agency`, `mainManager`,     │
+    │ `pole`. Le rattachement société → groupe n'existe que sur cet onglet.      │
+    │                                                                            │
+    │   parentCompany : `null`, ou `{id, type: "company"}` — renseigné sur ~6    │
+    │                   fiches sur 20 échantillonnées ;                          │
+    │   subsidiaries  : LISTE de `{id, type: "company"}`, vide sans filiale.     │
+    │                                                                            │
+    │ Les deux sens sont COHÉRENTS en réel : la fiche d'un groupe listait 16     │
+    │ filiales, et chacune pointait vers lui par `parentCompany`. Le mock DÉRIVE │
+    │ `subsidiaries` de `parentCompany` pour garantir la même propriété.         │
+    └────────────────────────────────────────────────────────────────────────────┘
+    """
+
+    agency: Relation | None = None
+    createdBy: Relation | None = None
+    files: RelationListe | None = None
+    influencers: RelationListe | None = None
+    mainManager: Relation | None = None
+    parentCompany: Relation | None = Field(
+        default=None,
+        description="The group this company belongs to — `data: null` when none.",
+    )
+    pole: Relation | None = None
+    subsidiaries: RelationListe | None = Field(
+        default=None,
+        description="Companies whose `parentCompany` is this one — empty list when none.",
+    )
+
+
+class AttributsInformationSociete(Permissif):
+    """`GET /companies/{id}/information` — les VINGT-SEPT attributs relevés en
+    réel le 2026-09-13 (type JSON:API `company`).
+
+    Seuls les NOMS ont été observés. Les types des attributs déjà servis par la
+    recherche (`AttributsSociete`) sont repris ; tous les autres sont marqués
+    `unverified` et inscrits dans docs/UNVERIFIED-FIELDS.md.
+    """
+
+    address: str | None = Field(default=None, json_schema_extra=_type_non_observe("address"))
+    apeCode: str | None = Field(default=None, json_schema_extra=_type_non_observe("apeCode"))
+    billingDetails: list[dict[str, Any]] = Field(
+        default_factory=list, json_schema_extra=_type_non_observe("billingDetails")
+    )
+    country: str | None = None
+    creationDate: str | None = None
+    creationSource: str | None = Field(
+        default=None, json_schema_extra=_type_non_observe("creationSource")
+    )
+    departments: list[str] = Field(
+        default_factory=list, json_schema_extra=_type_non_observe("departments")
+    )
+    expertiseArea: str | None = None
+    fax: str | None = Field(default=None, json_schema_extra=_type_non_observe("fax"))
+    informationComments: str | None = None
+    legalStatus: str | None = Field(
+        default=None, json_schema_extra=_type_non_observe("legalStatus")
+    )
+    name: str
+    number: str | None = Field(default=None, json_schema_extra=_type_non_observe("number"))
+    origin: SourceOuOrigine | None = Field(
+        default=None, json_schema_extra=_type_non_observe("origin")
+    )
+    phone1: str | None = None
+    postcode: str | None = Field(default=None, json_schema_extra=_type_non_observe("postcode"))
+    registeredOffice: bool | None = Field(
+        default=None, json_schema_extra=_type_non_observe("registeredOffice")
+    )
+    registrationNumber: str | None = Field(
+        default=None, json_schema_extra=_type_non_observe("registrationNumber")
+    )
+    socialNetworks: list[ReseauSocial] = Field(default_factory=list)
+    staff: int | None = Field(default=None, json_schema_extra=_type_non_observe("staff"))
+    state: int | None = None
+    subDivision: str | None = Field(
+        default=None, json_schema_extra=_type_non_observe("subDivision")
+    )
+    thumbnail: str | None = None
+    town: str | None = None
+    updateDate: str | None = None
+    vatNumber: str | None = Field(default=None, json_schema_extra=_type_non_observe("vatNumber"))
+    website: str | None = None
+
+
+class InformationSociete(Permissif):
+    id: str
+    type: str = "company"
+    attributes: AttributsInformationSociete
+    relationships: RelationsInformationSociete | None = None
+
+
 class RelationsContact(Permissif):
     mainManager: Relation | None = None
     company: Relation | None = None

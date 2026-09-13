@@ -385,6 +385,22 @@ _CLIENTS = [
     ("Softalliance", "Paris", "Éditeur de logiciels", "https://softalliance.example", False),
     ("Foncière Beaumont", "Paris", "Immobilier", "https://fonciere-beaumont.example", False),
 ]
+#: ┌─ LE RATTACHEMENT AU GROUPE — filiale → mère ─────────────────────────────┐
+#: │ Observé en production le 2026-09-13 (sonde lecture seule, noms seuls) : │
+#: │ le groupe n'est servi QUE par `GET /companies/{id}/information`, via    │
+#: │ `parentCompany` (renseigné sur ~6 fiches sur 20) et `subsidiaries`.     │
+#: │ Ni la liste `/companies` ni le profil ne le portent.                    │
+#: │                                                                          │
+#: │ Il vit donc ICI, hors des `relationships` des items : les y mettre      │
+#: │ l'aurait fait fuir dans la recherche, où le fournisseur ne le sert pas. │
+#: │ `subsidiaries` n'est jamais stocké — il est DÉRIVÉ de cette table, ce   │
+#: │ qui garantit la cohérence des deux sens mesurée en réel (un groupe à    │
+#: │ 16 filiales, chacune pointant vers lui).                                 │
+#: └──────────────────────────────────────────────────────────────────────────┘
+_MERES_SOCIETES: dict[int, int] = {
+    3: 9,  # Voltalis Énergie  → Groupe Ardentes
+    5: 9,  # TransEuropa Fret  → Groupe Ardentes
+}
 _ID_FOURNISSEUR_SOUSTRAITANCE = 11  # Fivetech Partners
 _ID_FOURNISSEUR_LICENCES = 12  # Softalliance
 _ID_FOURNISSEUR_LOYER = 13  # Foncière Beaumont
@@ -3139,6 +3155,9 @@ def build_realiste_dataset(seed: int = 42) -> dict[str, Any]:
         "business_units": business_units,
         "candidates": candidats,
         "companies": societes,
+        # Filiale → mère, par id. Un DICT, pas une liste : il n'entre ni dans
+        # l'index des entités ni dans les compteurs de collections.
+        "company_parents": {str(f): str(m) for f, m in _MERES_SOCIETES.items()},
         "contacts": contacts,
         "contracts": contrats,
         "deliveries": missions,

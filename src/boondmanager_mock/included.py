@@ -263,6 +263,14 @@ FORMES_PAR_MODULE: dict[str, dict[str, Forme]] = {
         "candidate": _PERSONNE,
         "contract": _CONTRAT,
     },
+    # `GET /companies/{id}/information` — TYPES observés en réel le 2026-09-13
+    # (`agency`, `company`, `resource`) ; les attributs réduits de chaque type
+    # ne l'ont PAS été : on reprend les formes minimales des autres modules.
+    "companies/information": {
+        "agency": _NOM,
+        "company": _NOM,
+        "resource": _PERSONNE,
+    },
 }
 
 #: Repli pour les modules sans table dédiée (détails des modules secondaires).

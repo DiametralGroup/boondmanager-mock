@@ -4,7 +4,7 @@ version = "0.10.0"
 description = "BoondManager API mock — container image and installable Python package"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "Proprietary" }
+license = "Apache-2.0"
 
 # Volontairement minimales : le mock d'origine était tiré par l'image du backend
 # d'ophelie (SQLAlchemy, psycopg2, authzed, elasticsearch, boto3, mcp…) alors

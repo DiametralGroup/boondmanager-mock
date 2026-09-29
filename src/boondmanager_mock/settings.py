@@ -52,6 +52,12 @@ class Settings:
     # éprouver un pipeline qui pagine sans tri.
     stable_order: bool = True
 
+    # `updatedSince` / `filter[updateDate][gte]` : AFFORDANCE du mock, que
+    # l'API réelle IGNORE (sondé le 2026-09-29 sur 11 modules : totaux
+    # identiques avec et sans). Désactivée par défaut depuis 0.11.0 : appliquée
+    # d'office, elle a rendu vert un client qui relisait tout en production.
+    updated_since_enabled: bool = False
+
     # Le nom du tenant annoncé dans `meta.customer`.
     customer: str = "boreal-conseil"
 
@@ -89,6 +95,7 @@ class Settings:
         self.admin_enabled = _flag("BOOND_MOCK_ADMIN_ENABLED", False)
         self.admin_token = os.environ.get("BOOND_MOCK_ADMIN_TOKEN", "mock-admin-token")
         self.stable_order = _flag("BOOND_MOCK_STABLE_ORDER", True)
+        self.updated_since_enabled = _flag("BOOND_MOCK_UPDATED_SINCE", False)
         self.customer = os.environ.get("BOOND_MOCK_CUSTOMER", "boreal-conseil")
         self.forbidden_collections = frozenset(
             c.strip()

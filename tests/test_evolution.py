@@ -111,7 +111,7 @@ def test_facture_reglee_et_transaction_bancaire(client):
     assert reglees_avant  # garde-fou : la collection n'était pas vide
 
 
-def test_extraction_incrementale_de_bout_en_bout(client):
+def test_extraction_incrementale_de_bout_en_bout(client, monkeypatch):
     """Le scénario cible : snapshot complet, curseur, delta — rien d'autre.
 
     C'est LE flux que les consommateurs (ophelie, insights360) rejoueront
@@ -134,7 +134,9 @@ def test_extraction_incrementale_de_bout_en_bout(client):
     assert _rows(client, "actions") > snapshot["actions"]
     assert _rows(client, "resources") == snapshot["resources"]
 
-    # L'affordance fine (updatedSince, ISO-8601) voit le même delta.
+    # L'affordance fine (updatedSince, ISO-8601), rallumée à la demande, voit
+    # le même delta — le fournisseur, lui, l'ignore.
+    monkeypatch.setattr(mock.settings, "updated_since_enabled", True)
     fin = client.get(
         "/api/actions",
         headers=JWT,

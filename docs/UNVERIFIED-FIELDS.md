@@ -38,6 +38,10 @@ Since v0.3.0 the reference is TWOFOLD, and observation wins:
    18. A field the mock always leaves empty is a field nobody has ever seen.
    The 2026-09-10 probe exists because of that blind spot —
    [comparisons/2026-09-10.md](comparisons/2026-09-10.md).
+   The 2026-09-29 probe (version 9.1.97.2) measured BEHAVIOURS rather than
+   shapes — pagination, sorting, filters — on the same questions put to the
+   real API and to the mock, and corrected two earlier readings (`/actions`
+   and `/times`, below): [comparisons/2026-09-29.md](comparisons/2026-09-29.md).
 2. **Documented in the official RAML** (https://doc.boondmanager.com/api-externe/,
    `raml-build/`) — used where the real API showed nothing (module empty on
    the tenant, permissions).
@@ -62,7 +66,16 @@ Since v0.3.0 the reference is TWOFOLD, and observation wins:
 - the profile endpoints `resources/{id}` (18 attributes, `contracts`
   relationship), `contracts/{id}`, `resources/{id}/administrative`,
   `resources/{id}/technical-data` (type `resource`) — all at zero difference;
-- default ordering is STABLE; `sort=updateDate` and `period=updated|created`.
+- ordering (2026-09-29): without `sort`, a DESCENDING DATE — `updateDate` on
+  resources and companies, `startDate` on actions — stable between two
+  identical calls; a `sort` key outside the module's official `sortList`
+  (`sort=id` included) is ignored with a 200;
+- filters (2026-09-29): `period=updated` honoured on the 11 modules that
+  document it, `/orders` included; `period=inProgress` honoured on `/times`;
+  `updatedSince` ignored everywhere;
+- pagination (2026-09-29): maximum 500, 100 on `/actions`, and above the
+  maximum a silent fall-back to the default 30 rows; `agencies`, `poles` and
+  `business-units` ignore `page`/`maxResults` and return everything.
 
 ## Behaviour DOCUMENTED but not implemented by the provider
 
@@ -72,17 +85,26 @@ tells the caller something.
 
 | Endpoint | Documented | Observed | Measured |
 |---|---|---|---|
-| `/times` | `period=updated\|created` + `startDate`/`endDate` filters the collection | **accepted and ignored** — all three filter shapes return the full set (106 976 rows on a production tenant) | 2026-08-04, [comparisons/2026-08-04.md](comparisons/2026-08-04.md) |
+| every paginated module | `maxResults` maximum 500 | above the maximum, the API **falls back to the default 30 rows** — no cap, no error (`/companies?maxResults=501` → 30) | 2026-09-29 |
+| `/actions` | `maxResults` maximum 500 | maximum **100**: 100 → 100 rows, 101 → 30 | 2026-09-29 — supersedes the 2026-08-12 reading « ignores `maxResults` » |
+| `/resources` | `creationDate` in the `sortList`; `order=asc\|desc` | `sort=creationDate` ignored (default order, asc and desc); `sort=updateDate&order=asc` returns DESCENDING order | 2026-09-29 |
+| `/orders` | `creationDate` and `updateDate` in the schema | never returned — while `period=updated` does filter the module, on a date the vendor keeps to itself. The mock has no such hidden date: any `period=updated` window on `/orders` returns nothing here | 2026-08-12, re-verified 2026-09-29 |
 
-The mock reproduces this via `CollectionSpec(..., filtre_periode=False)` and
-locks it with `tests/test_ecarts_api_documentation.py`. It is NOT turned into a
-`422`: the real API does not reject these parameters, and a consumer seeing an
-error would fix a problem that does not exist.
+The mock reproduces each row (`PLAFONDS_MAXRESULTS`, `TRIS_IGNORES`,
+`TRIS_TOUJOURS_DECROISSANTS` in `envelope.py`) and locks them in
+`tests/test_dialecte.py` and `tests/test_ecarts_mesures_en_production.py`.
+None is turned into a `422`: the real API rejects nothing, and a consumer
+seeing an error would fix a problem that does not exist.
 
-Compounding gap: `times` also has no `updateDate` (see the matrix below). No
-timestamp to filter on, and no filter that works — a consumer has **no
-incremental path at all** on this collection, and must size its cadence
-accordingly.
+**Corrected on 2026-09-29: `/times` no longer belongs here.** It was listed on
+the strength of the 2026-08-04 probe, where three filter shapes were accepted
+and ignored — bare dates, `startMonth/endMonth`, `period=updated`. None of them
+is the contract's: the RAML documents a single value on `/times`,
+`period=inProgress` + `startDate`/`endDate`, on the date of the time row. It
+works — 111 745 rows unfiltered, 2 716 for September 2026. The mock honours it
+since 0.11.0 (`CollectionSpec(..., periodes=("inProgress",))`) and keeps
+ignoring the three other shapes, as the vendor does. `times` still has no
+`updateDate`: a consumer can window by row date, not by modification date.
 
 ## The RAML × observed matrix
 
@@ -96,8 +118,12 @@ owner token) — the mock no longer emits them:
 | resources (search) | `icSince`, `icStatus` — the bench is read through `availability: "immediate"` |
 | orders | `billableItemTypes`, `requestTimesheetsSignature` |
 | contracts (profile) | `exceptionalScales`, `forceContractAverageDailyProductionCost` — **corrected 2026-09-10**: `probationEndDate` (12/18), `renewalProbationEndDate` (12/18) and `contractAverageDailyProductionCost` (1/18) ARE returned, sparsely. See [comparisons/2026-09-10.md](comparisons/2026-09-10.md) |
-| times | `endDate`, `updateDate` |
-| absences, roles, times-reports, agencies, poles, business-units, banking-transactions, expenses | `updateDate` |
+| times | `endDate` |
+
+*Corrected on 2026-09-29: this matrix used to list `updateDate` as documented
+on times, absences, roles, times-reports, agencies, poles, business-units,
+banking-transactions and expenses. The official search schemas downloaded that
+day document it on none of them — it is absent from both sides, not a gap.*
 
 Gaps the mock KEEPS deliberately (tolerated by `compare_real.py`):
 
@@ -110,7 +136,7 @@ Gaps the mock KEEPS deliberately (tolerated by `compare_real.py`):
 | `contractAverageDailyCost` derivable from the gross | **SETTLED on 2026-09-10 — the mock no longer makes it derivable.** It served `monthlySalary * 12 * chargeFactor / numberOfWorkingDays`. Of 25 production contracts, **1** verifies within 1 % and 24 do not (median error 11.7 %, worst 44.2 %). A relation that holds in the mock and not at the vendor is worse than a missing field: every value looks right, and the consumer recomputes instead of reading. |
 | contract `agency` always equal to the resource's | **SETTLED on 2026-09-11 — the mock now diverges on a minority of contracts.** This is how BoondManager expresses MULTI-ENTITY affiliation: one person, several contracts, several agencies. Measured on a production tenant (70 multi-contract resources, 388 contracts): **18 contracts (4.6 %) carry an agency different from their resource's**, and 3 people span several — including the chief executive, spread over three entities. Giving every contract its resource's agency made a consumer green here and attached 4.6 % of contracts to the wrong RLS perimeter in production. Frequency is denser than real (≈16 %) so the case is actually exercised on a 38-contract dataset; the SHAPE is faithful, the rate is not. |
 | `isDeleted` | mock affordance, **no longer in the default payload** (see below) |
-| `/actions` ignores `maxResults` | reproduced since 0.6.0 — see below |
+| `/actions` caps `maxResults` at 100 | reproduced since 0.11.0 (0.6.0 to 0.10.0 served 30 rows whatever the request) — see below |
 | `candidates.availability` as an integer code | reproduced since 0.6.0 — see below |
 
 ## Still unattested
@@ -138,20 +164,23 @@ NULL column yields NULL — hence an empty result set, with no error at all.
 offer affordances the vendor lacks, but it must not put them in the default
 payload, where they read as vendor behaviour.*
 
-### 1.b `/actions` ignores `maxResults` — **reproduced since 0.6.0**
+### 1.b `/actions` caps `maxResults` at 100 — **reproduced since 0.11.0**
 
-`GET /actions?maxResults=500` returns **30** rows — not 500, and not a cap at
-100: exactly the default page size, whatever value is sent. The parameter is
-accepted, never rejected. The ten other collections probed the same day honour
-500.
+`GET /actions?maxResults=500` returns **30** rows. The 2026-08-12 probe read
+this as « the parameter is ignored », and 0.6.0 served 30 rows whatever the
+request. The 2026-09-29 probe tried more values: 2 → 2, 30 → 30, 100 → 100,
+101 → 30, 500 → 30. `/actions` honours `maxResults` up to **100** and, above
+that, falls back to its default page size — the same fall-back every module
+applies above 500.
 
 This is not a comfort detail. A consumer sizing its pagination budget on 500
-under-counts pages by a factor of 16: 46 933 actions are 94 pages at 500, but
-**1 565** at 30. insights360 stopped at its 1 000-page guard while blaming the
-API for « always returning a full page » — the API was paginating correctly.
+under-counts pages by a factor of 17: 50 777 actions are 102 pages at 500, 508
+at 100, and **1 693** at 30. insights360 first stopped at its 1 000-page guard
+while blaming the API for « always returning a full page », then paid 1 693
+calls per run — when asking for 100 would have cost 508.
 
-Same family as the period filter ignored on `/times`: a parameter accepted and
-silently dropped is worse than one rejected, because nothing signals it.
+A limit applied silently is worse than one rejected, because nothing signals
+it: the answer looks like an ordinary page.
 
 ### 1.bis `opportunities.startDate` may be the literal `immediate`
 
@@ -179,11 +208,18 @@ kind of gap a mock must carry rather than smooth over.
 The code→label mapping is not established: it lives in the instance dictionary,
 family `availability`, which `DOMAINES_DICTIONNAIRE` does not yet consume.
 
-### 2. `updatedSince` / `filter[updateDate][gte]` — **mock affordance**
+### 2. `updatedSince` / `filter[updateDate][gte]` — **mock affordance, OFF by default since 0.11.0**
 
 The official way is `period=updated` (DAY granularity). These two parameters
-offer a finer cursor that no documentation attests — they only apply to
-modules that expose `updateDate`.
+offer a finer cursor that no documentation attests — and the vendor IGNORES
+them: probed on 2026-09-29 on the 11 modules that document `period=updated`,
+`updatedSince=2099-01-01T00:00:00Z` left every total unchanged.
+
+Until 0.10.0 the mock applied them by default. A consumer built its
+incremental extraction on `updatedSince`, passed every test here, and re-read
+every collection on every production run. The affordance now takes
+`BOOND_MOCK_UPDATED_SINCE=true`; by default the mock ignores it, like the
+vendor.
 
 ### 3. Values of per-module meta keys and of included-only attributes
 

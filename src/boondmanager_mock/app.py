@@ -33,6 +33,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .auth import basic_is_valid, jwt_is_valid
 from .envelope import (
+    PERIODES_PAR_DEFAUT,
     apply_incremental,
     apply_keywords,
     apply_order,
@@ -100,12 +101,13 @@ class CollectionSpec:
     avec_included: bool = True  # les modules sans `included` au schéma officiel
     liste_405: bool = False  # GET liste absent en réel (contracts, deliveries)
     parametres_obligatoires: tuple[str, ...] = ()  # 422 code 1017 sinon
-    #: Le filtre `period=updated|created` est-il HONORÉ par cette collection ?
+    #: Les valeurs de `period` HONORÉES par cette collection.
     #:
-    #: `True` partout SAUF `/times` — cf. le bloc « ÉCART DOCUMENTÉ » ci-dessous.
-    #: Mettre `False` ne fait pas répondre en erreur : la collection accepte les
-    #: paramètres et les IGNORE, exactement comme le fournisseur.
-    filtre_periode: bool = True
+    #: `updated`/`created` partout SAUF `/times`, qui n'honore que
+    #: `inProgress` — cf. le bloc au-dessus de sa déclaration. Une valeur
+    #: absente d'ici ne fait pas répondre en erreur : la collection accepte le
+    #: paramètre et l'IGNORE, exactement comme le fournisseur.
+    periodes: tuple[str, ...] = PERIODES_PAR_DEFAUT
     meta_extra: tuple[str, ...] = ()  # clés meta propres au module (relevé réel)
 
 
@@ -166,39 +168,27 @@ COLLECTIONS: tuple[CollectionSpec, ...] = (
         "resources", "resources", Ressource, "resource", meta_extra=("conditionalFields", "solr")
     ),
     CollectionSpec("roles", "roles", Role, "role", avec_included=False),
-    # ┌─ ÉCART DOCUMENTÉ ENTRE L'API RÉELLE ET SA DOCUMENTATION ───────────────┐
-    # │ La documentation BoondManager présente `period=updated|created` +       │
-    # │ `startDate`/`endDate` comme un filtre GÉNÉRAL des collections.          │
-    # │ Sur `/times`, l'API RÉELLE ne l'honore pas : elle rend le jeu complet.  │
+    # ┌─ `/times` : LE FILTRE DU CONTRAT EST `period=inProgress` ───────────────┐
+    # │ Le contrat (RAML) ne documente sur `/times` qu'une valeur de `period` :  │
+    # │ `inProgress`, qui filtre les lignes dont la DATE (`startDate`) tombe     │
+    # │ entre `startDate` et `endDate`. Sondé le 2026-09-29 : elle marche.       │
     # │                                                                          │
-    # │ Mesuré le 2026-08-04 contre ui.boondmanager.com, sur un tenant de       │
-    # │ production comptant 106 976 lignes de temps :                            │
+    # │     sans filtre                                   → 111 745              │
+    # │     period=inProgress, 2026-09-01 → 2026-09-29    →   2 716              │
+    # │     period=inProgress, août 2026                  →   2 575              │
     # │                                                                          │
-    # │     sans filtre                       → 106 976                          │
-    # │     startDate=2026-07-01&endDate=…    → 106 976                          │
-    # │     startMonth=2026-07&endMonth=…     → 106 976                          │
-    # │     period=updated&startDate=…        → 106 976                          │
+    # │ Le relevé du 2026-08-04 avait testé trois AUTRES formes — dates seules,  │
+    # │ `startMonth/endMonth`, `period=updated` —, toutes ignorées, et en avait  │
+    # │ conclu qu'aucun fenêtrage n'existait. Ces trois formes restent ignorées  │
+    # │ ici, comme chez le fournisseur ; seule la forme du contrat filtre.       │
     # │                                                                          │
-    # │ Les trois formes sont acceptées — aucune n'est rejetée — et les trois    │
-    # │ rendent le même total. Il n'y a donc AUCUN fenêtrage côté serveur sur    │
-    # │ cette collection.                                                        │
+    # │ `/times` n'a toujours PAS d'`updateDate` (cf. models/entities.py) : on   │
+    # │ fenêtre sur la date des temps, pas sur leur modification. Une correction │
+    # │ d'une ligne ancienne ne se voit qu'en relisant sa période.               │
     # │                                                                          │
-    # │ Pourquoi le mock le reproduit plutôt que de « bien faire » :             │
-    # │   un mock qui filtre là où le fournisseur ne filtre pas rend le          │
-    # │   consommateur VERT sur un comportement qui n'existe pas. Le             │
-    # │   dimensionnement, la cadence d'extraction et la charge imposée à l'API  │
-    # │   se calculent alors sur une fiction. C'est précisément ce qui est       │
-    # │   arrivé : la cadence horaire d'insights360 supposait un incrémental,    │
-    # │   et représentait en réalité ~25 000 appels par jour.                    │
-    # │                                                                          │
-    # │ `/times` n'a par ailleurs PAS d'`updateDate` (cf. models/entities.py) :  │
-    # │ les deux faits se renforcent — pas d'horodatage à filtrer, pas de        │
-    # │ filtre. Un consommateur n'a d'autre choix qu'un rafraîchissement         │
-    # │ complet, et doit en tirer les conséquences sur sa cadence.               │
-    # │                                                                          │
-    # │ Cf. docs/comparisons/ et docs/UNVERIFIED-FIELDS.md.                      │
+    # │ Cf. docs/comparisons/2026-09-29.md et docs/UNVERIFIED-FIELDS.md.         │
     # └──────────────────────────────────────────────────────────────────────────┘
-    CollectionSpec("times", "times", Temps, "time", avec_detail=False, filtre_periode=False),
+    CollectionSpec("times", "times", Temps, "time", avec_detail=False, periodes=("inProgress",)),
     CollectionSpec(
         "times-reports",
         "times_reports",
@@ -284,7 +274,7 @@ def _collection_items(dataset_key: str) -> list[dict[str, Any]]:
 #  Application
 # ─────────────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="BoondManager mock", version="0.5.4", docs_url="/docs")
+app = FastAPI(title="BoondManager mock", version="0.11.0", docs_url="/docs")
 api = APIRouter(prefix="/api")
 
 
@@ -359,16 +349,16 @@ def _paginated(request: Request, spec: CollectionSpec) -> JSONResponse:
         debut, fin = params["startMonth"], params["endMonth"]
         items = [i for i in items if debut <= i["attributes"].get("term", "") <= fin]
     items = apply_keywords(items, params.get("keywords", ""), state.blobs(dataset_key))
-    # `filtre_periode=False` → les paramètres sont acceptés et IGNORÉS, comme
-    # le fournisseur le fait sur /times. Ne PAS transformer ça en 422 : l'API
-    # réelle ne rejette rien, elle rend simplement tout, et un consommateur qui
-    # verrait une erreur ici corrigerait un problème qui n'existe pas.
-    if spec.filtre_periode:
-        items = apply_period(items, params)
+    # Une valeur de `period` absente de `spec.periodes` est acceptée et
+    # IGNORÉE, comme le fournisseur le fait. Ne PAS transformer ça en 422 :
+    # l'API réelle ne rejette rien, elle rend simplement tout, et un
+    # consommateur qui verrait une erreur ici corrigerait un problème qui
+    # n'existe pas.
+    items = apply_period(items, params, spec.periodes)
     items = apply_incremental(items, extract_since(params))
 
     total = len(items)
-    items = apply_order(items, params, engine.request_counts.get(path, 1))
+    items = apply_order(items, params, engine.request_counts.get(path, 1), path_name)
 
     paged = paginate(items, params, path_name)
     if paged is None:

@@ -27,8 +27,8 @@ def _total(reponse: Any) -> int:
     return int(reponse.json()["meta"]["totals"]["rows"])
 
 
-def test_times_ignore_le_filtre_de_periode_comme_l_api_reelle(client: Any) -> None:
-    """`/times` accepte `period`/`startDate`/`endDate` et les IGNORE.
+def test_times_ignore_les_formes_hors_contrat_comme_l_api_reelle(client: Any) -> None:
+    """`/times` accepte les formes de filtre HORS contrat et les IGNORE.
 
     Mesuré le 2026-08-04 contre ui.boondmanager.com, sur un tenant de
     production à 106 976 lignes de temps :
@@ -38,12 +38,9 @@ def test_times_ignore_le_filtre_de_periode_comme_l_api_reelle(client: Any) -> No
         startMonth + endMonth          → 106 976
         period=updated + startDate     → 106 976
 
-    Les quatre formes rendent le même total. Aucune n'est rejetée — c'est le
-    point important : un 422 aurait au moins signalé quelque chose. Ici l'API
-    accepte silencieusement un filtre qu'elle n'applique pas.
-
-    Ce test échouera le jour où BoondManager corrigera son API. C'est
-    souhaitable : la correction devra alors être constatée, pas devinée.
+    Aucune de ces formes n'est rejetée — un 422 aurait au moins signalé
+    quelque chose. Mais aucune n'est non plus celle du contrat, qui ne
+    documente sur `/times` que `period=inProgress` : c'est le test suivant.
     """
     h = JWT
 
@@ -70,18 +67,44 @@ def test_times_ignore_le_filtre_de_periode_comme_l_api_reelle(client: Any) -> No
         )
 
 
-def test_les_autres_collections_honorent_bien_le_filtre(client: Any) -> None:
+def test_times_honore_period_in_progress_comme_l_api_reelle(client: Any) -> None:
+    """La forme du CONTRAT filtre, sur la date de la ligne.
+
+    Sondé le 2026-09-29 : 111 745 lignes sans filtre, 2 716 avec
+    `period=inProgress&startDate=2026-09-01&endDate=2026-09-29`, 2 575 pour
+    août. La conclusion du 2026-08-04 (« aucun fenêtrage possible ») venait de
+    formes hors contrat.
+    """
+    h = JWT
+    tout = client.get("/api/times", params={"maxResults": 500}, headers=h).json()["data"]
+    jours = sorted({t["attributes"]["startDate"][:10] for t in tout})
+    assert len(jours) > 2, "le jeu doit couvrir plusieurs jours pour éprouver le filtre"
+    debut, fin = jours[1], jours[-2]
+
+    reponse = client.get(
+        "/api/times",
+        params={"maxResults": 500, "period": "inProgress", "startDate": debut, "endDate": fin},
+        headers=h,
+    )
+    assert reponse.status_code == 200
+    fenetre = reponse.json()["data"]
+    attendus = [t["id"] for t in tout if debut <= t["attributes"]["startDate"][:10] <= fin]
+    assert 0 < len(fenetre) < len(tout)
+    assert sorted(t["id"] for t in fenetre) == sorted(attendus)
+
+
+def test_seule_times_restreint_ses_periodes(client: Any) -> None:
     """L'écart est LOCAL à `/times` — pas une propriété du mock entier.
 
-    Sans cette contre-épreuve, `filtre_periode=False` posé par erreur sur une
-    autre collection passerait inaperçu : le test précédent resterait vert, et
-    un consommateur perdrait silencieusement son incrémentalité.
+    Sans cette contre-épreuve, une collection privée de `period=updated` par
+    erreur passerait inaperçue, et un consommateur perdrait silencieusement
+    son incrémentalité.
     """
-    sans_filtre = [s.chemin for s in COLLECTIONS if not s.filtre_periode]
-    assert sans_filtre == ["times"], (
-        f"seule /times est concernée par l'écart mesuré ; trouvé : {sans_filtre}. "
-        "Ajouter une collection ici exige une MESURE contre l'API réelle, "
-        "documentée dans docs/comparisons/."
+    restreintes = {s.chemin: s.periodes for s in COLLECTIONS if "updated" not in s.periodes}
+    assert restreintes == {"times": ("inProgress",)}, (
+        f"seule /times restreint ses valeurs de `period` ; trouvé : {restreintes}. "
+        "Changer cela exige une MESURE contre l'API réelle, documentée dans "
+        "docs/comparisons/."
     )
 
     h = JWT
@@ -99,3 +122,33 @@ def test_les_autres_collections_honorent_bien_le_filtre(client: Any) -> None:
         "une fenêtre fermée en 1900 doit vider /actions ; si elle ne le fait "
         "pas, le filtre de période est cassé pour TOUTES les collections"
     )
+
+
+def test_updated_since_est_ignore_partout(client: Any) -> None:
+    """`updatedSince` n'est pas au contrat, et le fournisseur l'ignore sur les
+    11 modules qui ont `period=updated` (sondé le 2026-09-29). Le mock l'ignore
+    donc par défaut : l'appliquer rendait vert un client qui relisait tout."""
+    h = JWT
+    for chemin in ("resources", "companies", "contacts", "actions", "candidates", "invoices"):
+        total = _total(client.get(f"/api/{chemin}", params={"maxResults": 1}, headers=h))
+        futur = _total(
+            client.get(
+                f"/api/{chemin}",
+                params={"maxResults": 1, "updatedSince": "2099-01-01T00:00:00Z"},
+                headers=h,
+            )
+        )
+        officiel = _total(
+            client.get(
+                f"/api/{chemin}",
+                params={
+                    "maxResults": 1,
+                    "period": "updated",
+                    "startDate": "2099-01-01",
+                    "endDate": "2099-12-31",
+                },
+                headers=h,
+            )
+        )
+        assert futur == total, f"{chemin} : updatedSince ne doit rien filtrer"
+        assert officiel == 0, f"{chemin} : period=updated doit filtrer"

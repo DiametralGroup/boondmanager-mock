@@ -1,79 +1,83 @@
 ---
 type: features
-description: Pagination ordering — stable by default like the real API, with opt-in instability, and the client bug it once revealed.
+description: Pagination ordering as measured on the real API — descending dates by default, sort keys outside the official sortList ignored — with opt-in instability, and the `sort=id` advice it replaces.
 sources_of_truth:
   - src/boondmanager_mock/envelope.py
 review_triggers:
   - src/boondmanager_mock/envelope.py
   - src/boondmanager_mock/dataset/**
 update_policy: auto
-last_verified: 2026-07-31
+last_verified: 2026-09-29
 ---
 
 # Pagination ordering
 
 ## What the mock does
 
+Every row below was measured on the real API on 2026-09-29, except where it
+says otherwise.
+
 | Situation | Order |
 |---|---|
-| `sort=<field>` provided | **stable**, sorted on that field (`order=asc\|desc`, dotted paths accepted: `workUnitType.reference`) |
-| no `sort` (default) | **STABLE** — aligned with the observed real API (2026-07-31: two identical calls, same sequence) |
+| `sort=<key>`, key in the module's official `sortList` | sorted on that key, `order=asc\|desc`; numbers sort as numbers, dotted paths accepted (`workUnitType.reference`) |
+| `sort=<key>`, key outside the `sortList` — `sort=id` included | **ignored**: default order, status 200 |
+| `/resources?sort=creationDate` | ignored — the key is in the `sortList`, the vendor ignores it anyway |
+| `/resources?sort=updateDate` | always descending, `order=asc` included |
+| no `sort` | **descending date**: `updateDate` on resources and companies, `startDate` on actions; insertion order on the other collections (not measured). Two identical calls return the same sequence. |
 | `BOOND_MOCK_STABLE_ORDER=false` | unstable — pagination chaos, as an opt-in |
 | injection `{"kind": "unstable_order"}` | unstable, for the duration of a test |
 
 Instability is deterministic within a given test — `hash((request rank, id))`
 — hence reproducible, while genuinely varying from one request to the next.
 
-## Why instability remains available (opt-in)
+## Why the default order matters
 
-An API that does not guarantee result ordering **skips records and duplicates
-others** as soon as you paginate without an explicit sort. The mechanism is
-simple: if the order changes between the page-1 and page-2 requests, an
-element that was at the end of page 1 can reappear at the start of page 2
-(served twice), while its neighbour disappears.
+On a list sorted by modification date, a record modified while a consumer
+pages through it jumps to the head. Every following page shifts by one, and a
+record is served twice. A deletion does the reverse: everything moves up by
+one, and a record is never served. Neither case raises an error or a warning.
 
-Nothing signals it. No error, no warning — just incomplete data that looks
-complete.
+Up to 0.10.0 the mock served ascending identifiers by default, so no test here
+could show this.
 
-The mock's default is now STABLE — because that is what the real API showed,
-and fidelity comes first now that the mock doubles as a comparison bench. But
-a robust pipeline must survive instability: enabling chaos mode before
-signing off an extractor remains best practice.
+## The `sort=id` advice was wrong
 
-## What it revealed, immediately
+Up to 0.10.0 this page told consumers to always send
+`sort=id&order=asc`, as the stable key « present everywhere ». It is present
+nowhere: `id` is in no module's `sortList`, and the vendor ignores it — asc,
+desc and no sort return the same sequence. The mock ignored it too, by
+accident (the identifier is not an attribute, so every key compared equal),
+and its default order happened to be ascending identifiers. The advice looked
+right here and did nothing in production.
 
-When the mock was first extracted from its original repository, the production
-client's pagination test failed:
+The history that led to it still holds as a lesson. When the mock was first
+extracted from its original repository, a client that paginated without any
+sort lost six records out of twenty-four against an unstable mock:
 
 ```
 assert len({item["id"] for item in items}) == 24
 E   AssertionError: assert 18 == 24
 ```
 
-**Eighteen resources out of twenty-four.** That client paginated with `page`
-and `maxResults` **without ever sending a sort**. Against an unstable mock it
-lost six records out of twenty-four. That is not a mock artefact: it is how
-that client would behave against any API that does not guarantee its ordering.
+An API that does not guarantee its order between two requests can do exactly
+that. The fix was right in spirit, wrong in its choice of key.
 
 ## What a correct consumer does
 
-Always send a sort:
-
-```python
-params = {"page": page, "maxResults": page_size, "sort": "id", "order": "asc"}
-```
-
-Sorting on the identifier: stable, present everywhere, independent of business
-content. And verify it **server-side**, via `GET /__admin/state` →
-`last_query_params_by_path` — because a client that forgot its sort would
-otherwise pass every other test.
+- **Keep answers small.** Use the official incremental filter,
+  `period=updated&startDate&endDate` (day granularity, 11 modules), with a
+  one-day overlap. An answer that fits in one page cannot drift.
+- **Deduplicate on the identifier within a scan.** A record served twice must
+  not be loaded twice — critical for tables loaded in full refresh, where
+  nothing downstream deduplicates.
+- **Plan full reads.** A deletion during a long scan can hide one record until
+  the next complete read.
+- **Check what is really sent**, server-side: `GET /__admin/state` →
+  `query_params_by_path`.
 
 ## Official sort keys
 
-The BoondManager documentation publishes a `sortList` per module. The ones
-that matter for incremental extraction: **`updateDate` is an official sort key
-on resources, candidates, companies, contacts and opportunities**
-(`creationDate` on several others). Combined with the official
-`period=updated&startDate&endDate` filter, that is the vendor's incremental
-toolkit — both are implemented here. The mock sorts on any attribute: an
-acknowledged superset, documented in `docs/UNVERIFIED-FIELDS.md`.
+The `sortList` of every module is transcribed from the RAML into `SORT_LISTS`
+(`envelope.py`). `updateDate` is official on resources, candidates, companies,
+contacts and opportunities; on resources the vendor honours it in descending
+order only.

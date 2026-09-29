@@ -133,9 +133,9 @@ otherwise, as in production.
 | `included` | related entities in reduced per-module shapes (agency → `name`, resource → `firstName`/`lastName`…), transitive closure; absent from modules that do not declare it (absences, expenses, agencies, poles, roles) |
 | Identifiers | integers **as strings** (`^[1-9][0-9]*$`) — and **composite on `/times`** (`regular_1`, `exceptional_…`), lowercase types (`timesreport`, `bankingtransaction`…) |
 | Timestamps | `2026-03-12T09:24:00+0100` — Europe/Paris offset WITHOUT a colon |
-| Pagination | `page` (1-based) / `maxResults` (default 30, cap 500) |
-| Sorting | `sort` + `order`, dotted paths accepted; **`sort=updateDate` is official** on resources, candidates, companies, contacts, opportunities |
-| Incremental | **`period=updated|created` + `startDate`/`endDate`** (official, day granularity); `updatedSince=<ISO-8601>` as a finer-grained mock affordance |
+| Pagination | `page` (1-based) / `maxResults`: default 30, maximum 500 — **100 on `/actions`** — and above the maximum a **silent fall-back to 30 rows**; `agencies`, `poles`, `business-units` are not paginated (measured 2026-09-29) |
+| Sorting | `sort` + `order`, only for keys in the module's official `sortList` — any other key (`sort=id` included) is ignored; without `sort`, **descending dates** (`updateDate` on resources and companies, `startDate` on actions) — see [`docs/features/ordering.md`](docs/features/ordering.md) |
+| Incremental | **`period=updated|created` + `startDate`/`endDate`** (official, day granularity); **`period=inProgress`** on `/times` (row date); `updatedSince=<ISO-8601>` is IGNORED, like the vendor, unless `BOOND_MOCK_UPDATED_SINCE=true` |
 
 ## The dataset: “Boréal Conseil”
 
@@ -171,10 +171,12 @@ contacts. Every event pushes `updateDate` past the base dataset ceiling: a
   incremental extraction should have seen;
 - `BOOND_MOCK_EVOLUTION=false` (or interval 0) freezes everything.
 
-**Ordering is STABLE by default** — that is what the real API does (observed).
-Instability remains available as an opt-in (`BOOND_MOCK_STABLE_ORDER=false` or
-the `unstable_order` injection) to catch pipelines that paginate without an
-explicit sort. See [`docs/features/ordering.md`](docs/features/ordering.md).
+**Ordering is STABLE by default, and date-sorted** — that is what the real API
+does (measured): two identical calls return the same sequence, most recent
+first. Modifying a record moves it to the head, which is exactly how a real
+scan drifts. Instability remains available as an opt-in
+(`BOOND_MOCK_STABLE_ORDER=false` or the `unstable_order` injection). See
+[`docs/features/ordering.md`](docs/features/ordering.md).
 
 ## Failure modes
 
@@ -241,6 +243,7 @@ it.
 | `BOOND_MOCK_ADMIN_ENABLED` | `false` | mounts `/__admin` (absent otherwise, not merely forbidden) |
 | `BOOND_MOCK_ADMIN_TOKEN` | `mock-admin-token` | `X-Mock-Admin-Token` header |
 | `BOOND_MOCK_STABLE_ORDER` | `true` | stable ordering (like production); `false` = pagination chaos |
+| `BOOND_MOCK_UPDATED_SINCE` | `false` | honours the `updatedSince` / `filter[updateDate][gte]` affordance, which the real API ignores |
 | `BOOND_MOCK_CUSTOMER` | `boreal-conseil` | tenant announced in `meta.customer` |
 | `BOOND_MOCK_FORBIDDEN_COLLECTIONS` | — | collections answered with 403 — simulates a narrow-perimeter user token |
 | `BOOND_MOCK_COMPENSATION_MODE` | `csv` | `absent` / `csv` |

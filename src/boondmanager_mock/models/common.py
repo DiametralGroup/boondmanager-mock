@@ -175,7 +175,17 @@ REPONSES_ERREUR: dict[int | str, dict[str, Any]] = {
 
 # Paramètres de requête partagés par toutes les collections.
 ParamPage = Annotated[int, Field(ge=1, description="Page number, 1-based.")]
-ParamMaxResults = Annotated[int, Field(ge=1, le=500, description="Page size. Default 30, cap 500.")]
+ParamMaxResults = Annotated[
+    int,
+    Field(
+        ge=1,
+        le=500,
+        description=(
+            "Page size. Default 30, max 500 (100 on /actions); "
+            "above the max the API falls back to 30."
+        ),
+    ),
+]
 
 
 # ── Le dictionnaire des énumérations ─────────────────────────────────────────

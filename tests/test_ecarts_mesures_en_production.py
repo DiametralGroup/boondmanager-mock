@@ -136,26 +136,28 @@ def test_les_autres_collections_gardent_leur_updatedate(client):
         )
 
 
-# ── 3. `/actions` ignore `maxResults` ────────────────────────────────────────
+# ── 3. `/actions` plafonne `maxResults` à 100 ────────────────────────────────
 
 
-def test_les_actions_ignorent_maxresults(client):
-    """`GET /actions?maxResults=500` rend 30 lignes, pas 500.
+def test_les_actions_plafonnent_maxresults_a_100(client):
+    """`/actions` honore `maxResults` jusqu'à 100, et revient à 30 au-delà.
 
-    Le paramètre est ACCEPTÉ — pas de 422 — et silencieusement ignoré. Un
-    consommateur qui croit tenir 500 lignes par page sous-estime son nombre de
-    pages d'un facteur 16.
+    Relevé du 2026-08-12 : `maxResults=500` rend 30 lignes, lu alors comme
+    « le paramètre est ignoré ». Sonde du 2026-09-29 : 2 → 2, 30 → 30,
+    100 → 100, 101 → 30, 500 → 30. Ce n'est pas un refus mais un plafond de
+    100, au-delà duquel le fournisseur revient à sa taille par défaut.
     """
-    reponse = client.get("/api/actions?maxResults=500", headers=JWT)
-    assert reponse.status_code == 200, "le paramètre est accepté, jamais rejeté"
-
-    corps = reponse.json()
-    total = corps["meta"]["totals"]["rows"]
-    assert len(corps["data"]) == min(30, total)
+    total = client.get("/api/actions", headers=JWT).json()["meta"]["totals"]["rows"]
+    assert total > 30, "le jeu doit dépasser une page par défaut pour éprouver le plafond"
+    for demande, attendu in ((2, 2), (100, min(100, total)), (101, 30), (500, 30)):
+        reponse = client.get(f"/api/actions?maxResults={demande}", headers=JWT)
+        assert reponse.status_code == 200, "le paramètre est accepté, jamais rejeté"
+        assert len(reponse.json()["data"]) == attendu, f"maxResults={demande}"
 
 
 def test_les_autres_collections_honorent_maxresults(client):
-    """Sans ce garde, on aurait « corrigé » tout le monde au lieu d'/actions."""
+    """Sans ce garde, on aurait « corrigé » tout le monde au lieu d'/actions :
+    ailleurs, le plafond est 500."""
     for collection in ("contacts", "candidates", "times"):
         lignes = _premiers(client, collection, maxResults=100)
         total = client.get(f"/api/{collection}", headers=JWT).json()["meta"]["totals"]["rows"]

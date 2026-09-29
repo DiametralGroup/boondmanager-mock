@@ -149,11 +149,30 @@ def test_listes_contracts_et_deliveries_en_405(client):
         assert erreur["title"] == "405"
 
 
-def test_pagination_defauts_et_plafond(client):
+def test_pagination_defauts_et_depassement_du_plafond(client):
+    """Défaut 30, maximum 500 — et au-delà, un RETOUR aux 30 par défaut.
+
+    Sondé le 2026-09-29 : `/companies?maxResults=500` rend 500 lignes,
+    `maxResults=501` en rend 30. Le fournisseur ne plafonne pas, il revient
+    en silence à la taille par défaut."""
     defaut = client.get("/api/invoices", headers=JWT).json()
     assert len(defaut["data"]) == 30  # défaut maxResults=30
-    plafonne = client.get("/api/invoices?maxResults=5000", headers=JWT).json()
-    assert len(plafonne["data"]) == defaut["meta"]["totals"]["rows"]  # plafond 500 >> jeu
+    total = defaut["meta"]["totals"]["rows"]
+    au_plafond = client.get("/api/invoices?maxResults=500", headers=JWT).json()
+    assert len(au_plafond["data"]) == min(500, total)
+    au_dela = client.get("/api/invoices?maxResults=5000", headers=JWT).json()
+    assert len(au_dela["data"]) == min(30, total)
+    assert au_dela["meta"]["totals"]["rows"] == total, "le total, lui, ne bouge pas"
+
+
+def test_modules_sans_pagination_rendent_tout(client):
+    """agencies, poles, business-units n'ont pas de pagination au contrat : le
+    fournisseur ignore `page` et `maxResults` (sondé le 2026-09-29)."""
+    for chemin in ("agencies", "poles", "business-units"):
+        tout = client.get(f"/api/{chemin}", headers=JWT).json()
+        page2 = client.get(f"/api/{chemin}?page=2&maxResults=1", headers=JWT).json()
+        assert len(tout["data"]) == tout["meta"]["totals"]["rows"] > 1
+        assert [i["id"] for i in page2["data"]] == [i["id"] for i in tout["data"]]
 
 
 def test_pagination_invalide_422(client):
@@ -182,7 +201,7 @@ def test_tri_officiel_sur_updateDate(client):
 def test_tri_chemin_pointe(client):
     corps = client.get("/api/times?sort=workUnitType.reference&maxResults=500", headers=JWT).json()
     references = [t["attributes"]["workUnitType"]["reference"] for t in corps["data"]]
-    assert references == sorted(references, key=str)
+    assert references == sorted(references)
 
 
 def test_ordre_stable_par_defaut(client):
@@ -190,6 +209,63 @@ def test_ordre_stable_par_defaut(client):
     a = client.get("/api/resources?maxResults=10", headers=JWT).json()["data"]
     b = client.get("/api/resources?maxResults=10", headers=JWT).json()["data"]
     assert [d["id"] for d in a] == [d["id"] for d in b]
+
+
+def test_ordre_par_defaut_date_decroissante(client):
+    """Sans tri, le fournisseur sert une date DÉCROISSANTE (sondé le 2026-09-29) :
+    `updateDate` sur resources et companies, `startDate` sur actions."""
+    for chemin, champ in (
+        ("resources", "updateDate"),
+        ("companies", "updateDate"),
+        ("actions", "startDate"),
+    ):
+        corps = client.get(f"/api/{chemin}?maxResults=500", headers=JWT).json()
+        valeurs = [i["attributes"].get(champ) or "" for i in corps["data"]]
+        assert valeurs == sorted(valeurs, reverse=True), chemin
+
+
+def test_cle_hors_sortlist_ignoree(client):
+    """`sort=id` n'est dans aucun `sortList` officiel : ignoré sans erreur, en
+    asc comme en desc (sondé le 2026-09-29). Une clé inventée aussi."""
+    defaut = client.get("/api/companies?maxResults=10", headers=JWT).json()["data"]
+    for params in ("sort=id&order=asc", "sort=id&order=desc", "sort=cleInconnue"):
+        reponse = client.get(f"/api/companies?maxResults=10&{params}", headers=JWT)
+        assert reponse.status_code == 200
+        assert [i["id"] for i in reponse.json()["data"]] == [i["id"] for i in defaut], params
+
+
+def test_cle_officielle_honoree_dans_les_deux_sens(client):
+    """`sort=updateDate` sur companies et `sort=startDate` sur actions honorent
+    `order` (sondé le 2026-09-29)."""
+    for chemin, champ in (("companies", "updateDate"), ("actions", "startDate")):
+        for sens in ("asc", "desc"):
+            corps = client.get(
+                f"/api/{chemin}?sort={champ}&order={sens}&maxResults=500", headers=JWT
+            ).json()
+            valeurs = [i["attributes"].get(champ) or "" for i in corps["data"]]
+            assert valeurs == sorted(valeurs, reverse=(sens == "desc")), (chemin, sens)
+
+
+def test_tri_des_ressources_comme_le_reel(client):
+    """Deux bizarreries mesurées le 2026-09-29 sur /resources : `creationDate`
+    est au `sortList` mais ignoré, et `updateDate&order=asc` rend l'ordre
+    décroissant. `lastName`, lui, honore les deux sens."""
+    defaut = client.get("/api/resources?maxResults=500", headers=JWT).json()["data"]
+    for sens in ("asc", "desc"):
+        creation = client.get(
+            f"/api/resources?sort=creationDate&order={sens}&maxResults=500", headers=JWT
+        ).json()["data"]
+        assert [i["id"] for i in creation] == [i["id"] for i in defaut]
+    asc = client.get("/api/resources?sort=updateDate&order=asc&maxResults=500", headers=JWT).json()[
+        "data"
+    ]
+    dates = [i["attributes"]["updateDate"] for i in asc]
+    assert dates == sorted(dates, reverse=True)
+    noms = client.get("/api/resources?sort=lastName&order=desc&maxResults=500", headers=JWT).json()[
+        "data"
+    ]
+    valeurs = [i["attributes"].get("lastName") or "" for i in noms]
+    assert valeurs == sorted(valeurs, reverse=True)
 
 
 def test_period_updated_officiel(client):
@@ -217,8 +293,20 @@ def test_period_created_officiel(client):
         assert item["attributes"]["creationDate"][:4] == "2026"
 
 
-def test_updated_since_affordance_du_mock(client):
-    """Les deux formes non attestées restent servies (cf. UNVERIFIED-FIELDS)."""
+def test_updated_since_ignore_par_defaut_comme_le_reel(client):
+    """Le fournisseur accepte `updatedSince` et l'IGNORE (sondé le 2026-09-29,
+    11 modules) : par défaut, le mock fait de même."""
+    tout = client.get("/api/resources?maxResults=500", headers=JWT).json()
+    for param in ("updatedSince", "filter[updateDate][gte]"):
+        futur = client.get(
+            "/api/resources", headers=JWT, params={param: "2099-01-01T00:00:00Z", "maxResults": 500}
+        ).json()
+        assert futur["meta"]["totals"]["rows"] == tout["meta"]["totals"]["rows"], param
+
+
+def test_updated_since_affordance_sur_demande(client, monkeypatch):
+    """`BOOND_MOCK_UPDATED_SINCE=true` rallume l'affordance (cf. UNVERIFIED-FIELDS)."""
+    monkeypatch.setattr(mock.settings, "updated_since_enabled", True)
     for param in ("updatedSince", "filter[updateDate][gte]"):
         futur = client.get(
             "/api/resources", headers=JWT, params={param: "2099-01-01T00:00:00Z", "maxResults": 500}

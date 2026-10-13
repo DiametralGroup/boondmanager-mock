@@ -1,14 +1,14 @@
-"""État mutable du serveur.
+"""Mutable server state.
 
-L'API publique — `state.dataset`, `state.fail_collections`, `state.reset(seed=…)`
-— est conservée. S'y ajoutent deux caches invalidés ensemble à chaque mutation
-du monde (reset, événement d'évolution, /__admin/mutate) :
+The public API — `state.dataset`, `state.fail_collections`,
+`state.reset(seed=…)` — is kept. Two caches are added, invalidated together on
+every mutation of the world (reset, evolution event, /__admin/mutate):
 
-  • `index_entites()` — (type, id) → entité, pour `included` et les détails ;
-  • `blobs(cle)`      — le texte de recherche `keywords` par item, précalculé.
+  • `entity_index()` — (type, id) → entity, for `included` and detail views;
+  • `blobs(key)`      — the precomputed `keywords` search text per item.
 
-Sans eux, chaque requête resérialisait tout le jeu de données (recherche) et
-reparcourait toutes les collections (included).
+Without them, every request would re-serialize the whole dataset (search) and
+re-walk every collection (included).
 """
 
 from __future__ import annotations
@@ -18,26 +18,26 @@ import time
 from typing import Any
 
 from .evolution import Evolution
-from .included import TYPE_VERS_CLE
+from .included import TYPE_TO_KEY
 from .injection import engine
 from .settings import settings
 
 
 def build_dataset(seed: int = 42) -> dict[str, Any]:
-    """Construit le jeu de données « Boréal Conseil »."""
-    from .dataset.realiste import build_realiste_dataset
+    """Builds the « Boréal Conseil » dataset."""
+    from .dataset.realistic import build_realistic_dataset
 
-    return build_realiste_dataset(seed)
+    return build_realistic_dataset(seed)
 
 
 class MockState:
-    """État serveur mutable, pour simuler des changements distants et des pannes."""
+    """Mutable server state, to simulate remote changes and outages."""
 
     def __init__(self) -> None:
         self.dataset: dict[str, Any] = {}
-        # Conservé pour compatibilité : le levier d'injection historique,
-        # mutable en process. Les nouvelles pannes passent par
-        # `injection.engine`, pilotable par HTTP.
+        # Kept for compatibility: the historical injection lever, mutable
+        # in-process. New failures go through `injection.engine`, which is
+        # controllable over HTTP.
         self.fail_collections: set[str] = set()
         self.seed: int = settings.seed
         self.evolution: Evolution = Evolution(self.seed, time.time())
@@ -46,14 +46,14 @@ class MockState:
         self.reset()
 
     def reset(self, seed: int | None = None) -> None:
-        """Reconstruit le jeu de données et remet les compteurs à zéro.
+        """Rebuilds the dataset and resets the counters to zero.
 
-        ⚠️ Les règles d'injection sont remises À LA LIGNE DE BASE DÉCLARÉE PAR
-        L'ENVIRONNEMENT, et non à vide : si un `reset` vidait les règles, la
-        première requête d'une suite de tests effacerait silencieusement une
-        limite de débit configurée au niveau du compose.
+        ⚠️ Injection rules are reset TO THE BASELINE DECLARED BY THE
+        ENVIRONMENT, not to empty: if a `reset` cleared the rules, the first
+        request of a test suite would silently wipe out a rate limit
+        configured at the compose level.
 
-        L'évolution temporelle est RÉARMÉE : la chronologie repart de zéro.
+        Time evolution is REARMED: the timeline starts over from zero.
         """
         self.seed = settings.seed if seed is None else seed
         self.dataset = build_dataset(self.seed)
@@ -61,60 +61,59 @@ class MockState:
         engine.clear()
         engine.reset_counters()
         self.evolution = Evolution(self.seed, time.time())
-        self.invalider_caches()
+        self.invalidate_caches()
         _apply_baseline_injections()
 
-    # ── Caches dérivés du dataset ────────────────────────────────────────────
+    # ── Dataset-derived caches ───────────────────────────────────────────────
 
-    def invalider_caches(self) -> None:
-        """À appeler après TOUTE mutation du dataset (admin, évolution)."""
+    def invalidate_caches(self) -> None:
+        """Call after ANY dataset mutation (admin, evolution)."""
         self._index = None
         self._blobs = {}
 
-    def avancer_evolution(self, maintenant: float) -> None:
-        """Fait avancer la vie de l'entreprise ; invalide les caches si elle a bougé."""
-        if self.evolution.avancer(self.dataset, maintenant):
-            self.invalider_caches()
+    def advance_evolution(self, now: float) -> None:
+        """Advances the company's life; invalidates caches if it moved."""
+        if self.evolution.advance(self.dataset, now):
+            self.invalidate_caches()
 
-    def index_entites(self) -> dict[tuple[str, str], dict[str, Any]]:
-        """(type, id) → entité, sur toutes les collections servies."""
+    def entity_index(self) -> dict[tuple[str, str], dict[str, Any]]:
+        """(type, id) → entity, across every served collection."""
         if self._index is None:
             index: dict[tuple[str, str], dict[str, Any]] = {}
-            for cle in TYPE_VERS_CLE.values():
-                elements = self.dataset.get(cle)
+            for key in TYPE_TO_KEY.values():
+                elements = self.dataset.get(key)
                 if isinstance(elements, list):
                     for element in elements:
                         index[(element["type"], element["id"])] = element
             self._index = index
         return self._index
 
-    def blobs(self, cle_dataset: str) -> list[str]:
-        """Le texte de recherche par item, aligné sur la liste de la collection."""
-        if cle_dataset not in self._blobs:
-            items = self.dataset.get(cle_dataset, [])
-            self._blobs[cle_dataset] = [
+    def blobs(self, dataset_key: str) -> list[str]:
+        """The search text per item, aligned with the collection's list."""
+        if dataset_key not in self._blobs:
+            items = self.dataset.get(dataset_key, [])
+            self._blobs[dataset_key] = [
                 json.dumps(item, ensure_ascii=False).lower() for item in items
             ]
-        return self._blobs[cle_dataset]
+        return self._blobs[dataset_key]
 
     def totals(self) -> dict[str, int]:
         return {k: len(v) for k, v in self.dataset.items() if isinstance(v, list)}
 
 
 def _apply_baseline_injections() -> None:
-    """Règles d'injection déclarées par l'environnement, réappliquées à chaque reset.
+    """Injection rules declared by the environment, reapplied on every reset.
 
-    Permet à un docker-compose ou à un sidecar de faire tourner le mock en
-    permanence dégradé (limite de débit basse, par exemple) sans qu'un test ne
-    l'annule par inadvertance.
+    Lets a docker-compose or a sidecar keep the mock permanently degraded
+    (e.g. a low rate limit) without a test inadvertently canceling it.
     """
     import os
 
-    if (seuil := os.environ.get("BOOND_MOCK_RATE_LIMIT_AFTER")) is not None:
+    if (threshold := os.environ.get("BOOND_MOCK_RATE_LIMIT_AFTER")) is not None:
         engine.add(
             kind="rate_limit",
             scope="/api/*",
-            after_requests=int(seuil),
+            after_requests=int(threshold),
             retry_after_seconds=int(os.environ.get("BOOND_MOCK_RETRY_AFTER", "1")),
         )
 

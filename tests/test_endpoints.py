@@ -1,8 +1,8 @@
-"""Les 22 collections : dialecte, intégrité référentielle, cohérence métier.
+"""The 22 collections: dialect, referential integrity, business coherence.
 
-C'est la suite qui prépare la comparaison avec la vraie API : chemins, `type`
-JSON:API en minuscules, enveloppe `meta` complète, `included` résolu, détail
-`/{id}` là où le fournisseur en a un — et NULLE PART ailleurs.
+This is the suite that prepares the comparison with the real API: paths,
+lowercase JSON:API `type`, full `meta` envelope, resolved `included`, `/{id}`
+detail where the vendor has one — and NOWHERE else.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import pytest
 
 from tests.conftest import JWT
 
-# (chemin, type JSON:API, détail ?, included ?)
+# (path, JSON:API type, detail?, included?)
 COLLECTIONS = [
     ("absences", "absence", False, False),
     ("actions", "action", True, True),
@@ -39,148 +39,145 @@ COLLECTIONS = [
     ("times-reports", "timesreport", True, True),
 ]
 
-ID_OFFICIEL = re.compile(r"^[1-9][0-9]*$")
-#: Les ids de /times sont composites en réel : `regular_1`, `exceptional_3`…
-ID_TEMPS = re.compile(r"^(regular|exceptional)_[1-9][0-9]*$")
-#: Recherches absentes en réel (405) — les données passent par les détails.
-SANS_LISTE = {"contracts", "deliveries"}
-#: Paramètres obligatoires par collection (fenêtre de CRA).
-PARAMS_OBLIGATOIRES = {"times-reports": {"startMonth": "2026-05", "endMonth": "2026-07"}}
+OFFICIAL_ID = re.compile(r"^[1-9][0-9]*$")
+#: /times ids are composite for real: `regular_1`, `exceptional_3`…
+TIME_ID = re.compile(r"^(regular|exceptional)_[1-9][0-9]*$")
+#: Searches absent for real (405) — the data goes through details.
+NO_LIST = {"contracts", "deliveries"}
+#: Mandatory parameters per collection (timesheet window).
+REQUIRED_PARAMS = {"times-reports": {"startMonth": "2026-05", "endMonth": "2026-07"}}
 
 
-def _cle_dataset(chemin: str) -> str:
-    return chemin.replace("-", "_")
+def _dataset_key(path: str) -> str:
+    return path.replace("-", "_")
 
 
-def _lister(client, chemin: str, **params):
+def _list(client, path: str, **params):
     return client.get(
-        f"/api/{chemin}",
+        f"/api/{path}",
         headers=JWT,
-        params={**PARAMS_OBLIGATOIRES.get(chemin, {}), **params},
+        params={**REQUIRED_PARAMS.get(path, {}), **params},
     )
 
 
-@pytest.mark.parametrize(("chemin", "type_", "detail", "included"), COLLECTIONS)
-def test_liste_dialecte(client, chemin, type_, detail, included):  # noqa: ARG001
-    """200, enveloppe officielle, types minuscules, ids au format réel."""
-    if chemin in SANS_LISTE:
-        pytest.skip("recherche absente en réel (405) — couverte par test_dialecte")
-    reponse = _lister(client, chemin)
-    assert reponse.status_code == 200
-    corps = reponse.json()
+@pytest.mark.parametrize(("path", "type_", "detail", "included"), COLLECTIONS)
+def test_list_dialect(client, path, type_, detail, included):  # noqa: ARG001
+    """200, official envelope, lowercase types, real-format ids."""
+    if path in NO_LIST:
+        pytest.skip("search absent for real (405) — covered by test_dialect")
+    response = _list(client, path)
+    assert response.status_code == 200
+    body = response.json()
 
-    meta = corps["meta"]
-    assert meta["totals"]["rows"] >= 1, f"/{chemin} est vide — le jeu de données doit être complet"
+    meta = body["meta"]
+    assert meta["totals"]["rows"] >= 1, f"/{path} is empty — the dataset must be complete"
     assert meta["isLogged"] is True
     assert meta["language"] == "fr"
     assert isinstance(meta["version"], str)
 
-    motif = ID_TEMPS if chemin == "times" else ID_OFFICIEL
-    assert corps["data"], f"/{chemin} ne rend aucune donnée"
-    for item in corps["data"]:
+    pattern = TIME_ID if path == "times" else OFFICIAL_ID
+    assert body["data"], f"/{path} returns no data"
+    for item in body["data"]:
         assert item["type"] == type_
-        assert motif.match(item["id"]), f"id non conforme : {item['id']!r}"
+        assert pattern.match(item["id"]), f"non-conforming id: {item['id']!r}"
         assert isinstance(item["attributes"], dict)
 
     if included:
-        assert corps.get("included"), f"/{chemin} devrait porter un tableau included"
+        assert body.get("included"), f"/{path} should carry an included array"
     else:
-        assert "included" not in corps, f"/{chemin} ne doit pas porter d'included (schéma officiel)"
+        assert "included" not in body, f"/{path} must not carry included (official schema)"
 
 
-@pytest.mark.parametrize(("chemin", "type_"), [(c, t) for c, t, detail, _ in COLLECTIONS if detail])
-def test_detail_et_404(client, boond_state, chemin, type_):
-    premier = boond_state.dataset[_cle_dataset(chemin)][0]
-    reponse = client.get(f"/api/{chemin}/{premier['id']}", headers=JWT)
-    assert reponse.status_code == 200
-    corps = reponse.json()
-    assert corps["data"]["id"] == premier["id"]
-    assert corps["data"]["type"] == type_
-    # Le détail porte le meta SANS totals — la forme des profils réels.
-    assert "totals" not in corps["meta"]
-    assert corps["meta"]["isLogged"] is True
+@pytest.mark.parametrize(("path", "type_"), [(c, t) for c, t, detail, _ in COLLECTIONS if detail])
+def test_detail_and_404(client, boond_state, path, type_):
+    first = boond_state.dataset[_dataset_key(path)][0]
+    response = client.get(f"/api/{path}/{first['id']}", headers=JWT)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"]["id"] == first["id"]
+    assert body["data"]["type"] == type_
+    # The detail carries meta WITHOUT totals — the real profile shape.
+    assert "totals" not in body["meta"]
+    assert body["meta"]["isLogged"] is True
 
-    absent = client.get(f"/api/{chemin}/999999", headers=JWT)
+    absent = client.get(f"/api/{path}/999999", headers=JWT)
     assert absent.status_code == 404
-    erreur = absent.json()["errors"][0]
-    assert erreur["code"] == "404"
-    assert erreur["detail"] == f"HTTP 404 (GET /api/{chemin}/999999)"
+    error = absent.json()["errors"][0]
+    assert error["code"] == "404"
+    assert error["detail"] == f"HTTP 404 (GET /api/{path}/999999)"
 
 
-@pytest.mark.parametrize("chemin", [c for c, _, detail, _ in COLLECTIONS if not detail])
-def test_pas_de_detail_sur_les_collections_search_only(client, boond_state, chemin):
-    """/absences, /expenses et /times n'ont pas de /{id} chez le fournisseur."""
-    premier = boond_state.dataset[_cle_dataset(chemin)][0]
-    reponse = client.get(f"/api/{chemin}/{premier['id']}", headers=JWT)
-    assert reponse.status_code == 404
-    assert reponse.json()["errors"][0]["title"] == "404"  # l'enveloppe, pas le 404 FastAPI
+@pytest.mark.parametrize("path", [c for c, _, detail, _ in COLLECTIONS if not detail])
+def test_no_detail_on_search_only_collections(client, boond_state, path):
+    """/absences, /expenses and /times have no /{id} at the vendor."""
+    first = boond_state.dataset[_dataset_key(path)][0]
+    response = client.get(f"/api/{path}/{first['id']}", headers=JWT)
+    assert response.status_code == 404
+    assert response.json()["errors"][0]["title"] == "404"  # the envelope, not FastAPI's 404
 
 
 @pytest.mark.parametrize(
-    "chemin", [c for c, _, _, included in COLLECTIONS if included and c not in SANS_LISTE]
+    "path", [c for c, _, _, included in COLLECTIONS if included and c not in NO_LIST]
 )
-def test_included_resout_les_relations_de_la_page(client, chemin):
-    """Toute relation portée par la page a son entité dans `included`.
+def test_included_resolves_the_pages_relations(client, path):
+    """Every relationship carried by the page has its entity in `included`.
 
-    C'est la propriété que les clients réels exploitent (afficher les libellés
-    sans requête supplémentaire) — un included lacunaire passerait inaperçu
-    jusqu'au premier rendu côté consommateur.
+    This is the property real clients rely on (displaying labels without an
+    extra request) — a gap in `included` would go unnoticed until the
+    consumer's first render.
     """
-    corps = _lister(client, chemin, maxResults=100).json()
-    inclus = {(e["type"], e["id"]) for e in corps.get("included", [])}
-    # schedule/batch : toujours nuls ici ; opportunityparsingjob : hors liste
-    # blanche du module (comme en réel).
-    IGNORES = {"schedule", "batch", "opportunityparsingjob"}
-    for item in corps["data"]:
-        for nom, relation in (item.get("relationships") or {}).items():
+    body = _list(client, path, maxResults=100).json()
+    included = {(e["type"], e["id"]) for e in body.get("included", [])}
+    # schedule/batch: always null here; opportunityparsingjob: outside the
+    # module's whitelist (like for real).
+    IGNORED = {"schedule", "batch", "opportunityparsingjob"}
+    for item in body["data"]:
+        for name, relation in (item.get("relationships") or {}).items():
             data = relation.get("data")
             refs = data if isinstance(data, list) else ([data] if data else [])
             for ref in refs:
-                if ref["type"] in IGNORES:
+                if ref["type"] in IGNORED:
                     continue
-                assert (ref["type"], ref["id"]) in inclus, (
-                    f"/{chemin} item {item['id']} : relation {nom} → "
-                    f"{ref['type']}/{ref['id']} absente d'included"
+                assert (ref["type"], ref["id"]) in included, (
+                    f"/{path} item {item['id']}: relation {name} → "
+                    f"{ref['type']}/{ref['id']} missing from included"
                 )
 
 
-def test_integrite_referentielle_du_dataset(boond_state):
-    """Chaque référence {id, type} du jeu de données résout, sans exception."""
+def test_dataset_referential_integrity(boond_state):
+    """Every {id, type} reference in the dataset resolves, with no exception."""
     dataset = boond_state.dataset
     collections = {k: v for k, v in dataset.items() if isinstance(v, list) and k != "remuneration"}
     index = {(item["type"], item["id"]) for items in collections.values() for item in items}
-    for cle, items in collections.items():
+    for key, items in collections.items():
         for item in items:
-            for nom, relation in (item.get("relationships") or {}).items():
+            for name, relation in (item.get("relationships") or {}).items():
                 data = relation.get("data")
                 refs = data if isinstance(data, list) else ([data] if data else [])
                 for ref in refs:
                     assert (ref["type"], ref["id"]) in index, (
-                        f"{cle}/{item['id']} : {nom} → {ref['type']}/{ref['id']} cassée"
+                        f"{key}/{item['id']}: {name} → {ref['type']}/{ref['id']} broken"
                     )
 
 
-def test_coherence_facturation(boond_state):
-    """Factures ↔ commandes ↔ projets : les cumuls se recoupent."""
+def test_billing_coherence(boond_state):
+    """Invoices ↔ orders ↔ projects: the cumulatives reconcile."""
     d = boond_state.dataset
-    factures_par_commande: dict[str, float] = {}
+    invoices_by_order: dict[str, float] = {}
     for f in d["invoices"]:
         if f["attributes"]["state"] > 0:
             cid = f["relationships"]["order"]["data"]["id"]
-            factures_par_commande[cid] = round(
-                factures_par_commande.get(cid, 0.0)
-                + f["attributes"]["turnoverInvoicedExcludingTax"],
+            invoices_by_order[cid] = round(
+                invoices_by_order.get(cid, 0.0) + f["attributes"]["turnoverInvoicedExcludingTax"],
                 2,
             )
-    for commande in d["orders"]:
-        attrs = commande["attributes"]
-        assert attrs["turnoverInvoicedExcludingTax"] == factures_par_commande.get(
-            commande["id"], 0.0
-        )
+    for order in d["orders"]:
+        attrs = order["attributes"]
+        assert attrs["turnoverInvoicedExcludingTax"] == invoices_by_order.get(order["id"], 0.0)
         assert attrs["deltaInvoicedExcludingTax"] == round(
             attrs["turnoverOrderedExcludingTax"] - attrs["turnoverInvoicedExcludingTax"], 2
         )
-        # TTC = HT x 1,20 sur chaque facture.
+        # Including tax = excluding tax x 1.20 on every invoice.
     for f in d["invoices"]:
         attrs = f["attributes"]
         assert attrs["turnoverInvoicedIncludingTax"] == round(
@@ -188,24 +185,24 @@ def test_coherence_facturation(boond_state):
         )
 
 
-def test_coherence_activite(boond_state):
-    """Temps ↔ CRA ↔ missions : les lignes tombent dans le bon mois et le bon CRA."""
+def test_activity_coherence(boond_state):
+    """Time ↔ timesheet ↔ deliveries: rows fall in the right month and timesheet."""
     d = boond_state.dataset
-    cras = {t["id"]: t for t in d["times_reports"]}
-    missions = {m["id"]: m for m in d["deliveries"]}
-    for temps in d["times"]:
-        attrs = temps["attributes"]
-        cra = cras[temps["relationships"]["timesReport"]["data"]["id"]]
-        assert attrs["startDate"][:7] == cra["attributes"]["term"], (
-            f"temps {temps['id']} hors du terme de son CRA"
+    timesreports = {t["id"]: t for t in d["times_reports"]}
+    deliveries = {m["id"]: m for m in d["deliveries"]}
+    for time_row in d["times"]:
+        attrs = time_row["attributes"]
+        timesreport = timesreports[time_row["relationships"]["timesReport"]["data"]["id"]]
+        assert attrs["startDate"][:7] == timesreport["attributes"]["term"], (
+            f"time row {time_row['id']} outside its timesheet's term"
         )
-        ref_mission = temps["relationships"]["delivery"]["data"]
-        if ref_mission is not None:
-            mission = missions[ref_mission["id"]]
+        delivery_ref = time_row["relationships"]["delivery"]["data"]
+        if delivery_ref is not None:
+            delivery = deliveries[delivery_ref["id"]]
             assert (
-                mission["relationships"]["dependsOn"]["data"]["id"]
-                == (cra["relationships"]["resource"]["data"]["id"])
-            ), f"temps {temps['id']} : le CRA n'appartient pas au consultant de la mission"
+                delivery["relationships"]["dependsOn"]["data"]["id"]
+                == (timesreport["relationships"]["resource"]["data"]["id"])
+            ), f"time row {time_row['id']}: timesheet does not belong to the delivery's consultant"
         assert attrs["workUnitType"]["activityType"] in (
             "production",
             "internal",
@@ -213,7 +210,7 @@ def test_coherence_activite(boond_state):
         )
 
 
-def test_coherence_absences_et_frais(boond_state):
+def test_absences_and_expenses_coherence(boond_state):
     d = boond_state.dataset
     for absence in d["absences"]:
         attrs = absence["attributes"]
@@ -221,43 +218,43 @@ def test_coherence_absences_et_frais(boond_state):
         assert attrs["startDate"] <= attrs["endDate"]
         assert attrs["absencesReport"]["resource"]["id"]
         assert attrs["duration"] >= 1
-    for frais in d["expenses"]:
-        attrs = frais["attributes"]
+    for expense in d["expenses"]:
+        attrs = expense["attributes"]
         assert attrs["expensesReport"]["term"] == attrs["startDate"][:7]
         if attrs["isKilometricExpense"]:
-            bareme = attrs["expensesReport"]["ratePerKilometerType"]["amount"]
-            assert attrs["amountIncludingTax"] == round(attrs["numberOfKilometers"] * bareme, 2)
+            rate = attrs["expensesReport"]["ratePerKilometerType"]["amount"]
+            assert attrs["amountIncludingTax"] == round(attrs["numberOfKilometers"] * rate, 2)
 
 
-def test_coherence_rh(boond_state):
-    """Contrats ↔ ressources : chaque salarié a un contrat, chaînes CDD → CDI liées."""
+def test_hr_coherence(boond_state):
+    """Contracts ↔ resources: every employee has a contract, fixed-term chains linked."""
     d = boond_state.dataset
-    ressources = {r["id"]: r for r in d["resources"]}
-    titulaires = set()
-    for contrat in d["contracts"]:
-        ref = contrat["relationships"]["dependsOn"]["data"]
+    resources = {r["id"]: r for r in d["resources"]}
+    holders = set()
+    for contract in d["contracts"]:
+        ref = contract["relationships"]["dependsOn"]["data"]
         assert ref["type"] == "resource"
-        titulaires.add(ref["id"])
-        res = ressources[ref["id"]]
-        assert res["attributes"]["typeOf"] == 0, "un sous-traitant n'a pas de contrat de travail"
-        assert contrat["attributes"]["monthlySalary"] > 1500
-        parent = contrat["relationships"]["parentContract"]
+        holders.add(ref["id"])
+        res = resources[ref["id"]]
+        assert res["attributes"]["typeOf"] == 0, "a subcontractor has no employment contract"
+        assert contract["attributes"]["monthlySalary"] > 1500
+        parent = contract["relationships"]["parentContract"]
         if parent["data"] is not None:
             ids = {c["id"] for c in d["contracts"]}
             assert parent["data"]["id"] in ids
-    salaries = {r["id"] for r in d["resources"] if r["attributes"]["typeOf"] == 0}
-    assert salaries <= titulaires, "chaque salarié doit porter au moins un contrat"
+    employees = {r["id"] for r in d["resources"] if r["attributes"]["typeOf"] == 0}
+    assert employees <= holders, "every employee must carry at least one contract"
 
 
-def test_paiements_achats(boond_state):
+def test_purchase_payments(boond_state):
     d = boond_state.dataset
-    for achat in d["purchases"]:
-        engages = round(
+    for purchase in d["purchases"]:
+        engaged = round(
             sum(
                 p["attributes"]["amountExcludingTax"]
                 for p in d["payments"]
-                if p["relationships"]["purchase"]["data"]["id"] == achat["id"]
+                if p["relationships"]["purchase"]["data"]["id"] == purchase["id"]
             ),
             2,
         )
-        assert achat["attributes"]["engagedPaymentsAmountExcludingTax"] == engages
+        assert purchase["attributes"]["engagedPaymentsAmountExcludingTax"] == engaged

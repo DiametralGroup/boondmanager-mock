@@ -1,8 +1,8 @@
-"""Les modes de panne — pilotés par HTTP, donc utilisables depuis un conteneur.
+"""Failure modes — controlled over HTTP, hence usable from a container.
 
-« The point of the mock is to reproduce failure modes, not just happy paths. »
-Un test par mode listé, plus les deux propriétés qui rendent ces modes
-exploitables : la panne transitoire s'épuise, la panne persistante non.
+"The point of the mock is to reproduce failure modes, not just happy paths."
+One test per listed mode, plus the two properties that make these modes
+useful: a transient failure exhausts itself, a persistent one does not.
 """
 
 from __future__ import annotations
@@ -10,24 +10,24 @@ from __future__ import annotations
 import boondmanager_mock as mock
 from tests.conftest import ADMIN, JWT
 
-TOTAL_RESSOURCES = 34
+TOTAL_RESOURCES = 34
 
 
-# ── Le plan de contrôle lui-même ─────────────────────────────────────────────
+# ── The control plane itself ─────────────────────────────────────────────────
 
 
-def test_admin_exige_un_jeton(client) -> None:
-    """Sans jeton, /__admin est fermé — même quand il est monté."""
+def test_admin_requires_a_token(client) -> None:
+    """Without a token, /__admin is closed — even when mounted."""
     assert client.get("/__admin/state").status_code == 401
     assert client.post("/__admin/inject", json={"kind": "status"}).status_code == 401
 
 
-def test_admin_monte_conditionnellement(client) -> None:
-    """Le routeur admin n'est pas « monté puis interdit » : il est absent.
+def test_admin_mounts_conditionally(client) -> None:
+    """The admin router is not "mounted then forbidden": it is absent.
 
-    On vérifie la condition à la source plutôt que de ré-importer le paquet
-    dans un autre état, ce qui polluerait la session. La preuve que le montage
-    a eu lieu est comportementale : l'endpoint répond.
+    The condition is checked at the source rather than re-importing the
+    package in another state, which would pollute the session. The proof
+    mounting happened is behavioral: the endpoint responds.
     """
     import inspect
     import sys
@@ -35,16 +35,16 @@ def test_admin_monte_conditionnellement(client) -> None:
     app_module = sys.modules["boondmanager_mock.app"]
     source = inspect.getsource(app_module)
     assert "if settings.admin_enabled:" in source, (
-        "le montage du routeur admin n'est plus conditionnel"
+        "mounting the admin router is no longer conditional"
     )
     assert client.get("/__admin/state", headers=ADMIN).status_code == 200
 
 
-# ── 429 + Retry-After ────────────────────────────────────────────────────────
+# ── 429 + Retry-After ─────────────────────────────────────────────────────────
 
 
-def test_rate_limit_avec_retry_after(client) -> None:
-    """Après N requêtes : 429 avec un en-tête Retry-After exploitable."""
+def test_rate_limit_with_retry_after(client) -> None:
+    """After N requests: 429 with a usable Retry-After header."""
     client.post(
         "/__admin/inject",
         headers=ADMIN,
@@ -57,13 +57,13 @@ def test_rate_limit_avec_retry_after(client) -> None:
     )
     assert client.get("/api/resources", headers=JWT).status_code == 200
     assert client.get("/api/resources", headers=JWT).status_code == 200
-    trop = client.get("/api/resources", headers=JWT)
-    assert trop.status_code == 429
-    assert trop.headers["Retry-After"] == "3"
+    too_many = client.get("/api/resources", headers=JWT)
+    assert too_many.status_code == 429
+    assert too_many.headers["Retry-After"] == "3"
 
 
-def test_rate_limit_ne_touche_pas_les_autres_collections(client) -> None:
-    """Le `scope` est bien respecté : une autre collection reste servie."""
+def test_rate_limit_does_not_affect_other_collections(client) -> None:
+    """`scope` is honored: another collection is still served."""
     client.post(
         "/__admin/inject",
         headers=ADMIN,
@@ -73,15 +73,15 @@ def test_rate_limit_ne_touche_pas_les_autres_collections(client) -> None:
     assert client.get("/api/companies", headers=JWT).status_code == 200
 
 
-# ── 500 / 503 transitoires ───────────────────────────────────────────────────
+# ── 500 / 503 transient ───────────────────────────────────────────────────────
 
 
-def test_status_transitoire_s_epuise(client) -> None:
-    """`times: 2` → deux échecs, puis ça repasse.
+def test_transient_status_exhausts_itself(client) -> None:
+    """`times: 2` → two failures, then it recovers.
 
-    C'est ce qui permet de tester un RETRY. Sans compteur, on ne testerait
-    qu'un échec — et le test « le run se termine malgré un 503 » serait
-    impossible à écrire.
+    This is what lets a RETRY be tested. Without a counter, only a failure
+    would be tested — and "the run completes despite a 503" would be
+    impossible to write.
     """
     client.post(
         "/__admin/inject",
@@ -93,8 +93,8 @@ def test_status_transitoire_s_epuise(client) -> None:
     assert client.get("/api/projects", headers=JWT).status_code == 200
 
 
-def test_status_persistant_ne_s_epuise_pas(client) -> None:
-    """Sans `times`, la panne dure — le run DOIT échouer, pas se terminer à moitié."""
+def test_persistent_status_never_exhausts(client) -> None:
+    """Without `times`, the failure lasts — the run MUST fail, not half-complete."""
     client.post(
         "/__admin/inject",
         headers=ADMIN,
@@ -104,41 +104,41 @@ def test_status_persistant_ne_s_epuise_pas(client) -> None:
         assert client.get("/api/projects", headers=JWT).status_code == 500
 
 
-# ── Ordre instable ───────────────────────────────────────────────────────────
+# ── Unstable order ────────────────────────────────────────────────────────────
 
 
-def test_ordre_instable_par_injection(client) -> None:
-    """L'instabilité d'ordre est un mode de CHAOS, en opt-in — le défaut est
-    stable, comme la vraie API (relevé 2026-07-31)."""
+def test_unstable_order_by_injection(client) -> None:
+    """Order instability is an opt-in CHAOS mode — the default is stable, like
+    the real API (observed 2026-07-31)."""
     client.post("/__admin/inject", headers=ADMIN, json={"kind": "unstable_order", "scope": "*"})
     page1 = client.get("/api/resources", headers=JWT, params={"maxResults": 10}).json()["data"]
     page2 = client.get("/api/resources", headers=JWT, params={"maxResults": 10}).json()["data"]
     assert [d["id"] for d in page1] != [d["id"] for d in page2]
 
 
-def test_ordre_stable_avec_sort(client) -> None:
-    """Avec `sort`, l'ordre est reproductible — et effectivement trié."""
+def test_stable_order_with_sort(client) -> None:
+    """With `sort`, order is reproducible — and actually sorted."""
     params = {"maxResults": 10, "sort": "lastName"}
     a = client.get("/api/resources", headers=JWT, params=params).json()["data"]
     b = client.get("/api/resources", headers=JWT, params=params).json()["data"]
     assert [d["id"] for d in a] == [d["id"] for d in b]
-    noms = [d["attributes"]["lastName"] for d in a]
-    assert noms == sorted(noms)
+    names = [d["attributes"]["lastName"] for d in a]
+    assert names == sorted(names)
 
 
-def test_ordre_instable_par_environnement(client, monkeypatch) -> None:
+def test_unstable_order_by_environment(client, monkeypatch) -> None:
     monkeypatch.setattr(mock.settings, "stable_order", False)
     a = client.get("/api/resources", headers=JWT, params={"maxResults": 10}).json()["data"]
     b = client.get("/api/resources", headers=JWT, params={"maxResults": 10}).json()["data"]
     assert [d["id"] for d in a] != [d["id"] for d in b]
 
 
-# ── Dérive de pagination ─────────────────────────────────────────────────────
+# ── Page drift ────────────────────────────────────────────────────────────────
 
 
-def test_page_drift_duplique_un_enregistrement(client) -> None:
-    """Un enregistrement rendu sur deux pages consécutives — la cause classique
-    d'une duplication silencieuse quand la donnée bouge en cours de pagination."""
+def test_page_drift_duplicates_a_record(client) -> None:
+    """A record rendered on two consecutive pages — the classic cause of
+    silent duplication when data moves while paginating."""
     client.post(
         "/__admin/inject",
         headers=ADMIN,
@@ -154,66 +154,66 @@ def test_page_drift_duplique_un_enregistrement(client) -> None:
     page2 = client.get("/api/times-reports", headers=JWT, params={**params, "page": 2}).json()
     ids1 = [d["id"] for d in page1["data"]]
     ids2 = [d["id"] for d in page2["data"]]
-    assert set(ids1) & set(ids2), "un enregistrement doit apparaître sur les deux pages"
+    assert set(ids1) & set(ids2), "a record must appear on both pages"
 
 
-# ── Filtre incrémental + mutations ───────────────────────────────────────────
+# ── Incremental filter + mutations ───────────────────────────────────────────
 
 
-def test_mutate_avance_l_horodatage_et_rend_l_enregistrement_visible(client) -> None:
-    """Le chemin exact d'un test d'incrémentalité côté consommateur.
+def test_mutate_bumps_the_timestamp_and_makes_the_record_visible(client) -> None:
+    """The exact path of a consumer-side incrementality test.
 
-    Sans l'avancée de `updateDate`, le curseur incrémental ne reverrait jamais
-    l'enregistrement modifié — et le test « une modification met à jour
-    exactement une ligne » passerait en ne testant rien.
+    Without the `updateDate` bump, the incremental cursor would never see the
+    modified record again — and the test "a modification updates exactly one
+    row" would pass while testing nothing.
     """
-    curseur = {
+    cursor = {
         "period": "updated",
         "startDate": "2026-07-14",
         "endDate": "2026-12-31",
         "maxResults": 500,
     }
-    avant = client.get("/api/resources", headers=JWT, params=curseur).json()
-    assert avant["meta"]["totals"]["rows"] == 0, "le jeu de base est antérieur au curseur"
+    before = client.get("/api/resources", headers=JWT, params=cursor).json()
+    assert before["meta"]["totals"]["rows"] == 0, "the base dataset is older than the cursor"
 
-    reponse = client.post(
+    response = client.post(
         "/__admin/mutate",
         headers=ADMIN,
-        json={"collection": "resources", "id": "3", "attributes": {"title": "Modifié"}},
+        json={"collection": "resources", "id": "3", "attributes": {"title": "Modified"}},
     )
-    assert reponse.status_code == 200
+    assert response.status_code == 200
 
-    modifie = client.get("/api/resources/3", headers=JWT).json()["data"]
-    assert modifie["attributes"]["title"] == "Modifié"
-    # `_bump` avance d'une seconde en préservant le fuseau : l'enregistrement
-    # reste dans la fenêtre du jeu de base, mais SON updateDate a bougé.
-    apres = client.get("/api/resources?maxResults=500", headers=JWT).json()
-    lui = next(d for d in apres["data"] if d["id"] == "3")
-    tous = client.get(
+    modified = client.get("/api/resources/3", headers=JWT).json()["data"]
+    assert modified["attributes"]["title"] == "Modified"
+    # `_bump` advances by one second while preserving the timezone: the
+    # record stays within the base dataset's window, but ITS updateDate moved.
+    after = client.get("/api/resources?maxResults=500", headers=JWT).json()
+    it = next(d for d in after["data"] if d["id"] == "3")
+    all_sorted = client.get(
         "/api/resources?maxResults=500&sort=updateDate&order=desc", headers=JWT
     ).json()
-    assert lui["attributes"]["updateDate"] >= tous["data"][-1]["attributes"]["updateDate"]
+    assert it["attributes"]["updateDate"] >= all_sorted["data"][-1]["attributes"]["updateDate"]
 
 
-# ── Mutations de RELATIONS ───────────────────────────────────────────────────
+# ── RELATIONSHIP mutations ───────────────────────────────────────────────────
 #
-# Chez BoondManager, le manager d'une ressource et son agence sont des
-# RELATIONS JSON:API, pas des attributs. Un consommateur qui dérive des droits
-# d'accès d'un organigramme (insights360/iris) doit pouvoir simuler les deux
-# mutations correspondantes : changement de hiérarchie et réaffectation
-# d'entité.
+# At BoondManager, a resource's manager and its agency are JSON:API
+# RELATIONSHIPS, not attributes. A consumer who derives access rights from an
+# org chart (insights360/iris) needs to be able to simulate both
+# corresponding mutations: a hierarchy change and an entity reassignment.
 
 
-def test_mutate_change_une_relation_sans_toucher_aux_autres(client) -> None:
-    """Le patch est clef par clef, comme celui des attributs.
+def test_mutate_changes_one_relation_without_touching_others(client) -> None:
+    """The patch is key by key, like the attributes' one.
 
-    Sans cela, éprouver un changement de manager emporterait l'agence avec
-    lui, et le test aval observerait DEUX mutations en croyant en mesurer une.
+    Without this, exercising a manager change would carry the agency along
+    with it, and the downstream test would observe TWO mutations while
+    believing it measured one.
     """
-    avant = client.get("/api/resources/3", headers=JWT).json()["data"]
-    agence_avant = avant["relationships"]["agency"]["data"]["id"]
+    before = client.get("/api/resources/3", headers=JWT).json()["data"]
+    agency_before = before["relationships"]["agency"]["data"]["id"]
 
-    reponse = client.post(
+    response = client.post(
         "/__admin/mutate",
         headers=ADMIN,
         json={
@@ -222,37 +222,37 @@ def test_mutate_change_une_relation_sans_toucher_aux_autres(client) -> None:
             "relationships": {"mainManager": {"data": {"id": "5", "type": "resource"}}},
         },
     )
-    assert reponse.status_code == 200
+    assert response.status_code == 200
 
-    apres = client.get("/api/resources/3", headers=JWT).json()["data"]
-    assert apres["relationships"]["mainManager"]["data"]["id"] == "5"
-    assert apres["relationships"]["agency"]["data"]["id"] == agence_avant
+    after = client.get("/api/resources/3", headers=JWT).json()["data"]
+    assert after["relationships"]["mainManager"]["data"]["id"] == "5"
+    assert after["relationships"]["agency"]["data"]["id"] == agency_before
 
 
-def test_mutate_accepte_l_identifiant_nu_et_conserve_le_type(client) -> None:
-    """`{"agency": "2"}` vaut la forme canonique — et le `type` ne vient pas
-    de la main du testeur, donc il ne peut pas se désaccorder."""
-    reponse = client.post(
+def test_mutate_accepts_the_bare_identifier_and_keeps_the_type(client) -> None:
+    """`{"agency": "2"}` is equivalent to the canonical shape, and the `type`
+    does not come from the tester's hand, so it cannot be misspelled."""
+    response = client.post(
         "/__admin/mutate",
         headers=ADMIN,
         json={"collection": "resources", "id": "3", "relationships": {"agency": "2"}},
     )
-    assert reponse.status_code == 200
+    assert response.status_code == 200
 
     relations = client.get("/api/resources/3", headers=JWT).json()["data"]["relationships"]
     assert relations["agency"]["data"] == {"id": "2", "type": "agency"}
 
 
-def test_mutate_refuse_une_clef_inconnue_au_lieu_de_mentir(client) -> None:
-    """LA régression qui motive ce lot.
+def test_mutate_refuses_an_unknown_key_instead_of_lying(client) -> None:
+    """THE regression that motivates this batch.
 
-    Patcher `attributes: {"main_manager_id": …}` — le nom de la colonne vue à
-    l'arrivée du pipeline, pas celui de la relation — renvoyait 200 et ne
-    changeait rien. Le scénario aval passait au vert sans rien avoir éprouvé.
-    Le refus doit en plus NOMMER les relations disponibles, pour que l'erreur
-    se corrige sans aller lire le code du mock.
+    Patching `attributes: {"main_manager_id": …}` — the column name seen on
+    arrival in the pipeline, not the relationship's name — used to return 200
+    and change nothing. The downstream scenario passed green without having
+    exercised anything. The refusal must also NAME the available
+    relationships, so the error can be fixed without reading the mock's code.
     """
-    reponse = client.post(
+    response = client.post(
         "/__admin/mutate",
         headers=ADMIN,
         json={
@@ -261,46 +261,47 @@ def test_mutate_refuse_une_clef_inconnue_au_lieu_de_mentir(client) -> None:
             "attributes": {"main_manager_id": "5"},
         },
     )
-    assert reponse.status_code == 400
-    corps = reponse.text
-    assert "main_manager_id" in corps
-    assert "mainManager" in corps, "le message doit montrer la clef correcte"
+    assert response.status_code == 400
+    body = response.text
+    assert "main_manager_id" in body
+    assert "mainManager" in body, "the message must show the correct key"
 
 
-def test_mutate_refuse_un_patch_vide(client) -> None:
-    """« Muté » sans rien à muter est le même mensonge, sous une autre forme."""
-    reponse = client.post(
+def test_mutate_refuses_an_empty_patch(client) -> None:
+    """ "Mutated" with nothing to mutate is the same lie, in another shape."""
+    response = client.post(
         "/__admin/mutate",
         headers=ADMIN,
         json={"collection": "resources", "id": "3"},
     )
-    assert reponse.status_code == 400
+    assert response.status_code == 400
 
 
-def test_soft_delete_pose_un_drapeau_sans_supprimer(client) -> None:
-    """Suppression LOGIQUE, jamais physique.
+def test_soft_delete_sets_a_flag_without_deleting(client) -> None:
+    """LOGICAL deletion, never physical.
 
-    Un pipeline incrémental en stratégie `merge` ne peut pas observer une
-    suppression physique sans rafraîchissement complet.
+    An incremental pipeline running a `merge` strategy cannot observe a
+    physical deletion without a full refresh.
     """
-    total_avant = client.get("/api/resources", headers=JWT).json()["meta"]["totals"]["rows"]
+    total_before = client.get("/api/resources", headers=JWT).json()["meta"]["totals"]["rows"]
     client.post("/__admin/delete", headers=ADMIN, json={"collection": "resources", "id": "8"})
-    # Le drapeau vit sur l'item de RECHERCHE (le profil réel ne le porte pas).
-    liste = client.get("/api/resources?maxResults=500", headers=JWT).json()["data"]
-    marque = next(d for d in liste if d["id"] == "8")
-    assert marque["attributes"]["isDeleted"] is True
-    total_apres = client.get("/api/resources", headers=JWT).json()["meta"]["totals"]["rows"]
-    assert total_apres == total_avant, "l'enregistrement reste servi, avec son drapeau"
+    # The flag lives on the SEARCH item (the real profile does not carry it).
+    items = client.get("/api/resources?maxResults=500", headers=JWT).json()["data"]
+    marked = next(d for d in items if d["id"] == "8")
+    assert marked["attributes"]["isDeleted"] is True
+    total_after = client.get("/api/resources", headers=JWT).json()["meta"]["totals"]["rows"]
+    assert total_after == total_before, "the record stays served, with its flag"
 
 
-# ── Observabilité du plan de contrôle ────────────────────────────────────────
+# ── Control plane observability ──────────────────────────────────────────────
 
 
-def test_state_expose_les_parametres_recus(client) -> None:
-    """La propriété qui permet de PROUVER qu'un consommateur envoie son curseur.
+def test_state_exposes_the_received_parameters(client) -> None:
+    """The property that lets a consumer PROVE it sends its cursor.
 
-    Un pipeline qui aurait oublié son paramètre incrémental passerait sinon tous
-    ses tests : le mock rendrait simplement tout, et le résultat serait correct.
+    A pipeline that forgot its incremental parameter would otherwise pass all
+    its tests: the mock would simply render everything, and the result would
+    be correct.
     """
     client.get(
         "/api/resources",
@@ -313,21 +314,21 @@ def test_state_expose_les_parametres_recus(client) -> None:
             "maxResults": 100,
         },
     )
-    etat = client.get("/__admin/state", headers=ADMIN).json()
-    recus = etat["last_query_params_by_path"]["/api/resources"]
-    assert recus["period"] == "updated"
-    assert recus["startDate"] == "2026-03-01"
-    assert recus["sort"] == "updateDate"
-    assert etat["request_counts_by_path"]["/api/resources"] >= 1
+    state = client.get("/__admin/state", headers=ADMIN).json()
+    received = state["last_query_params_by_path"]["/api/resources"]
+    assert received["period"] == "updated"
+    assert received["startDate"] == "2026-03-01"
+    assert received["sort"] == "updateDate"
+    assert state["request_counts_by_path"]["/api/resources"] >= 1
 
 
-def test_l_historique_des_parametres_garde_tous_les_appels(client) -> None:
-    """Deux consommateurs du meme chemin ne s'ecrasent plus dans l'etat.
+def test_the_params_history_keeps_every_call(client) -> None:
+    """Two consumers of the same path no longer overwrite each other in the state.
 
-    Constate le 13/08 cote consommateur : les ressources s'extraient en
-    incremental (updatedSince), puis la collecte des contrats reliste le meme
-    chemin sans curseur — et `last_query_params_by_path` ne montrait que le
-    second appel. L'historique garde les deux, dans l'ordre.
+    Observed on 2026-08-13 at the consumer: resources are extracted
+    incrementally (updatedSince), then collecting contracts re-lists the same
+    path with no cursor — and `last_query_params_by_path` only showed the
+    second call. The history keeps both, in order.
     """
     client.get(
         "/api/resources",
@@ -335,20 +336,20 @@ def test_l_historique_des_parametres_garde_tous_les_appels(client) -> None:
         params={"updatedSince": "2026-01-01T00:00:00Z", "sort": "id"},
     )
     client.get("/api/resources", headers=JWT, params={"sort": "id"})
-    etat = client.get("/__admin/state", headers=ADMIN).json()
-    appels = etat["query_params_by_path"]["/api/resources"]
-    assert len(appels) >= 2
-    assert appels[-2].get("updatedSince") == "2026-01-01T00:00:00Z"
-    assert "updatedSince" not in appels[-1]
-    assert etat["last_query_params_by_path"]["/api/resources"] == appels[-1]
+    state = client.get("/__admin/state", headers=ADMIN).json()
+    calls = state["query_params_by_path"]["/api/resources"]
+    assert len(calls) >= 2
+    assert calls[-2].get("updatedSince") == "2026-01-01T00:00:00Z"
+    assert "updatedSince" not in calls[-1]
+    assert state["last_query_params_by_path"]["/api/resources"] == calls[-1]
 
 
-def test_reset_change_de_graine(client) -> None:
-    """La graine est réglable par HTTP — et le reset la confirme."""
-    reponse = client.post("/__admin/reset", headers=ADMIN, json={"seed": 7})
-    assert reponse.json() == {"status": "reset", "seed": 7}
+def test_reset_changes_the_seed(client) -> None:
+    """The seed is settable over HTTP — and reset confirms it."""
+    response = client.post("/__admin/reset", headers=ADMIN, json={"seed": 7})
+    assert response.json() == {"status": "reset", "seed": 7}
     assert (
         client.get("/api/resources", headers=JWT).json()["meta"]["totals"]["rows"]
-        == TOTAL_RESSOURCES
+        == TOTAL_RESOURCES
     )
-    mock.state.reset()  # revient à la graine de l'environnement pour la suite
+    mock.state.reset()  # back to the environment's seed for the rest of the suite

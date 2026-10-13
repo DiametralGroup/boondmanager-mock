@@ -1,17 +1,17 @@
-"""Injection de pannes — le vrai intérêt d'un mock.
+"""Failure injection — the real point of a mock.
 
-« The point of the mock is to reproduce failure modes, not just happy paths »
-(spec insights360, §4.1). Le mock d'origine ne savait simuler qu'une panne :
-une collection ajoutée à un `set` Python, donc uniquement depuis le même
-processus. Dès que le mock tourne en conteneur — ce qui est le cas pour
-insights360, en compose comme en sidecar Tekton — cette voie disparaît.
+"The point of the mock is to reproduce failure modes, not just happy paths"
+(insights360 spec, §4.1). The original mock could only simulate one failure: a
+collection added to a Python `set`, so only from the same process. As soon as
+the mock runs in a container — which is the case for insights360, in compose
+as in a Tekton sidecar — that path disappears.
 
-D'où : des règles d'injection déclaratives, pilotables par HTTP (`/__admin`).
+Hence: declarative injection rules, controllable over HTTP (`/__admin`).
 
-Un SEUL point de dispatch, ordonné, évalué AVANT l'authentification, pour que
-`auth_reject` puisse préempter. Chaque règle porte un compteur `times`
-optionnel : une panne « transitoire » doit cesser d'elle-même, sinon on ne teste
-pas un retry, on teste un échec.
+A SINGLE dispatch point, ordered, evaluated BEFORE authentication, so that
+`auth_reject` can preempt it. Every rule carries an optional `times` counter: a
+"transient" failure must stop on its own, otherwise we are not testing a
+retry, we are testing a failure.
 """
 
 from __future__ import annotations
@@ -26,19 +26,20 @@ Kind = Literal["rate_limit", "status", "latency", "page_drift", "auth_reject", "
 
 @dataclass
 class Rule:
-    """Une règle d'injection.
+    """An injection rule.
 
-    `scope` est un motif glob sur le chemin (`/api/resources`, `/api/*`, `*`),
-    ce qui permet de viser une collection précise sans énumérer ses routes.
+    `scope` is a glob pattern on the path (`/api/resources`, `/api/*`, `*`),
+    which lets a precise collection be targeted without enumerating its
+    routes.
     """
 
     id: str
     kind: Kind
     scope: str = "*"
-    # Nombre d'applications restantes. None = illimité. Décrémenté à chaque
-    # déclenchement : c'est ce qui fait la différence entre une panne
-    # transitoire (que le retry doit absorber) et une panne persistante (qui
-    # doit faire échouer le run avec un code de sortie non nul).
+    # Number of remaining applications. None = unlimited. Decremented on each
+    # trigger: that is what makes the difference between a transient failure
+    # (that a retry should absorb) and a persistent failure (that must make
+    # the run fail with a non-zero exit code).
     times: int | None = None
 
     # rate_limit
@@ -58,7 +59,7 @@ class Rule:
         return fnmatch.fnmatch(path, self.scope)
 
     def consume(self) -> bool:
-        """Décrémente le compteur. Rend False quand la règle est épuisée."""
+        """Decrements the counter. Returns False once the rule is exhausted."""
         if self.times is None:
             return True
         if self.times <= 0:
@@ -67,31 +68,31 @@ class Rule:
         return True
 
 
-#: Appels conserves par chemin dans l'historique du plan de controle.
-_HISTORIQUE_MAX = 500
+#: Calls kept per path in the control plane's history.
+_HISTORY_MAX = 500
 
 
 class InjectionEngine:
-    """Le moteur, et le compteur de requêtes par chemin dont il dépend."""
+    """The engine, and the per-path request counter it depends on."""
 
     def __init__(self) -> None:
         self.rules: list[Rule] = []
         self.request_counts: dict[str, int] = {}
         self.last_query_params: dict[str, dict[str, str]] = {}
-        # L'HISTORIQUE, pas seulement le dernier : deux consommateurs legitimes
-        # peuvent frapper le meme chemin avec des strategies differentes (les
-        # ressources en incremental, les contrats en refresh complet). Ne garder
-        # que le dernier fait mentir le plan de controle — constate le 13/08 :
-        # un test d'incrementalite cote consommateur est tombe parce que le
-        # second appelant ecrasait la trace du premier. Borne par chemin : un
-        # etat qui grossit sans limite finirait coupe.
+        # The HISTORY, not just the last call: two legitimate consumers can
+        # hit the same path with different strategies (resources in
+        # incremental, contracts in full refresh). Keeping only the last one
+        # makes the control plane lie — observed on 2026-08-13: a consumer-side
+        # incrementality test failed because the second caller overwrote the
+        # first one's trace. Bounded per path: unbounded growth would
+        # eventually get truncated anyway.
         self.query_params_history: dict[str, list[dict[str, str]]] = {}
         self._next_id = 1
-        # Horloge virtuelle : permet de tester des fenêtres temporelles sans
-        # `sleep`, donc sans rendre la suite lente ni dépendante du timing réel.
+        # Virtual clock: lets time windows be tested without `sleep`, so
+        # without making the suite slow or dependent on real timing.
         self.clock_offset: float = 0.0
 
-    # ── Gestion des règles ───────────────────────────────────────────────────
+    # ── Rule management ──────────────────────────────────────────────────────
 
     def add(self, **kwargs: Any) -> Rule:
         rule = Rule(id=f"r{self._next_id}", **kwargs)
@@ -116,19 +117,19 @@ class InjectionEngine:
     # ── Observation ──────────────────────────────────────────────────────────
 
     def observe(self, path: str, params: dict[str, str]) -> int:
-        """Enregistre le passage d'une requête et rend son rang (1-based).
+        """Records a request's passage and returns its rank (1-based).
 
-        `last_query_params` est porteur : c'est ce qui permet à un consommateur
-        de prouver qu'il a bien ENVOYÉ le paramètre incrémental et le tri, au
-        lieu de simplement tolérer leur absence. Un pipeline qui aurait oublié
-        son curseur passerait sinon tous ses tests.
+        `last_query_params` is load-bearing: it is what lets a consumer prove
+        it actually SENT the incremental parameter and the sort order, instead
+        of merely tolerating their absence. A pipeline that forgot its cursor
+        would otherwise pass all its tests.
         """
         self.request_counts[path] = self.request_counts.get(path, 0) + 1
         self.last_query_params[path] = dict(params)
-        historique = self.query_params_history.setdefault(path, [])
-        historique.append(dict(params))
-        if len(historique) > _HISTORIQUE_MAX:
-            del historique[0]
+        history = self.query_params_history.setdefault(path, [])
+        history.append(dict(params))
+        if len(history) > _HISTORY_MAX:
+            del history[0]
         return self.request_counts[path]
 
     def now(self) -> float:
@@ -137,7 +138,7 @@ class InjectionEngine:
     # ── Dispatch ─────────────────────────────────────────────────────────────
 
     def first(self, kind: Kind, path: str) -> Rule | None:
-        """Première règle active du type demandé pour ce chemin."""
+        """First active rule of the requested kind for this path."""
         for rule in self.rules:
             if rule.kind == kind and rule.matches(path):
                 if rule.times is not None and rule.times <= 0:
@@ -169,7 +170,7 @@ class InjectionEngine:
         ]
 
 
-_CHAMPS_PAR_KIND: dict[str, set[str]] = {
+_FIELDS_BY_KIND: dict[str, set[str]] = {
     "rate_limit": {"after_requests", "retry_after_seconds"},
     "status": {"status"},
     "latency": {"seconds"},
@@ -179,8 +180,8 @@ _CHAMPS_PAR_KIND: dict[str, set[str]] = {
 }
 
 
-def _relevant(kind: str, champ: str) -> bool:
-    return champ in _CHAMPS_PAR_KIND.get(kind, set())
+def _relevant(kind: str, field_name: str) -> bool:
+    return field_name in _FIELDS_BY_KIND.get(kind, set())
 
 
 engine = InjectionEngine()

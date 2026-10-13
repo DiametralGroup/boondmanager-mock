@@ -1,12 +1,12 @@
-"""L'évolution temporelle — ce qui rend l'extraction INCRÉMENTALE testable.
+"""Time evolution — what makes INCREMENTAL extraction testable.
 
-Un extracteur incrémental ne prouve rien contre un jeu figé : son curseur
-passerait tous les tests sans avoir jamais filtré. Ici, la vie de l'entreprise
-avance quand l'horloge avance — et l'horloge se pilote par `/__admin/clock`,
-donc les tests font défiler des heures en quelques millisecondes.
+An incremental extractor proves nothing against a frozen dataset: its cursor
+would pass every test without ever having filtered. Here, the company's life
+advances when the clock advances — and the clock is driven through
+`/__admin/clock`, so tests fast-forward hours in a few milliseconds.
 
-L'intervalle est fixé à 3600 s par le harnais : UNE heure virtuelle = UN
-événement. Aucun événement ne se déclenche à l'horloge murale pendant la suite.
+The interval is fixed at 3600s by the harness: ONE virtual hour = ONE event.
+No event fires on the wall clock during the suite.
 """
 
 from __future__ import annotations
@@ -16,10 +16,10 @@ from fastapi.testclient import TestClient
 import boondmanager_mock as mock
 from tests.conftest import ADMIN, JWT
 
-UNE_HEURE = 3600
-#: Curseur posé APRÈS le plafond du jeu de base (2026-07-12) et AVANT l'époque
-#: des événements (2026-07-15) : il isole exactement ce qui a évolué.
-CURSEUR = {
+ONE_HOUR = 3600
+#: Cursor placed AFTER the base dataset's cap (2026-07-12) and BEFORE the
+#: events' epoch (2026-07-15): it isolates exactly what has evolved.
+CURSOR = {
     "period": "updated",
     "startDate": "2026-07-14",
     "endDate": "2026-12-31",
@@ -27,158 +27,158 @@ CURSEUR = {
 }
 
 
-def _avancer(client: TestClient, heures: int) -> None:
-    client.post("/__admin/clock", headers=ADMIN, json={"advance_seconds": heures * UNE_HEURE})
+def _advance(client: TestClient, hours: int) -> None:
+    client.post("/__admin/clock", headers=ADMIN, json={"advance_seconds": hours * ONE_HOUR})
 
 
-def _rows(client: TestClient, chemin: str, **params: str) -> int:
-    reponse = client.get(f"/api/{chemin}", headers=JWT, params={"maxResults": 500, **params})
-    return reponse.json()["meta"]["totals"]["rows"]
+def _rows(client: TestClient, path: str, **params: str) -> int:
+    response = client.get(f"/api/{path}", headers=JWT, params={"maxResults": 500, **params})
+    return response.json()["meta"]["totals"]["rows"]
 
 
-def test_le_jeu_est_stable_sans_avance_d_horloge(client):
-    avant = _rows(client, "actions")
-    assert _rows(client, "actions") == avant
-    assert _rows(client, "resources", **CURSEUR) == 0
+def test_the_dataset_is_stable_without_clock_advances(client):
+    before = _rows(client, "actions")
+    assert _rows(client, "actions") == before
+    assert _rows(client, "resources", **CURSOR) == 0
 
 
-def test_de_nouvelles_actions_apparaissent(client):
-    avant = _rows(client, "actions")
-    _avancer(client, 1)  # événement 0 : une action CRM
-    assert _rows(client, "actions") == avant + 1
+def test_new_actions_appear(client):
+    before = _rows(client, "actions")
+    _advance(client, 1)  # event 0: a CRM action
+    assert _rows(client, "actions") == before + 1
 
 
-def test_un_profil_est_mis_a_jour_avec_le_curseur_qui_le_voit(client):
-    _avancer(client, 2)  # événements 0-1 : action + profil enrichi
-    corps = client.get("/api/resources", headers=JWT, params=CURSEUR).json()
-    assert corps["meta"]["totals"]["rows"] == 1
-    assert corps["data"][0]["attributes"]["updateDate"].startswith("2026-07-15")
+def test_a_profile_is_updated_and_seen_by_the_cursor(client):
+    _advance(client, 2)  # events 0-1: action + enriched profile
+    body = client.get("/api/resources", headers=JWT, params=CURSOR).json()
+    assert body["meta"]["totals"]["rows"] == 1
+    assert body["data"][0]["attributes"]["updateDate"].startswith("2026-07-15")
 
 
-def test_staffing_puis_destaffing_visibles_sur_le_profil(client, boond_state):
-    """Le banc bouge : mission créée, `availability` basculée, `updateDate` frais.
+def test_staffing_then_destaffing_visible_on_the_profile(client, boond_state):
+    """The bench moves: delivery created, `availability` flipped, fresh `updateDate`.
 
-    Le banc se repère par `availability: "immediate"` — le champ OBSERVÉ en
-    réel. Les événements `staffing` tombent aux index 2, 10, 18, 26… Tant
-    qu'il reste des consultants au banc ils sont staffés ; ensuite l'événement
-    DÉSTAFFE quelqu'un — les deux sens finissent par se produire.
+    The bench is identified by `availability: "immediate"` — the field
+    OBSERVED for real. `staffing` events land at indexes 2, 10, 18, 26…
+    As long as consultants remain on the bench they get staffed; afterward
+    the event DESTAFFS someone — both directions eventually occur.
     """
-    missions_avant = len(boond_state.dataset["deliveries"])
-    banc_avant = [
+    deliveries_before = len(boond_state.dataset["deliveries"])
+    bench_before = [
         r["id"]
         for r in boond_state.dataset["resources"]
         if r["attributes"]["availability"] == "immediate"
     ]
-    assert banc_avant, "le jeu de base doit avoir un banc d'intercontrat"
+    assert bench_before, "the base dataset must have an intercontract bench"
 
-    _avancer(client, 3)  # inclut l'événement staffing k=2
-    assert len(boond_state.dataset["deliveries"]) == missions_avant + 1
-    staffe = next(r for r in boond_state.dataset["resources"] if r["id"] == banc_avant[0])
-    assert staffe["attributes"]["availability"] != "immediate"
-    assert staffe["attributes"]["updateDate"].startswith("2026-07-15")
+    _advance(client, 3)  # includes the staffing event k=2
+    assert len(boond_state.dataset["deliveries"]) == deliveries_before + 1
+    staffed = next(r for r in boond_state.dataset["resources"] if r["id"] == bench_before[0])
+    assert staffed["attributes"]["availability"] != "immediate"
+    assert staffed["attributes"]["updateDate"].startswith("2026-07-15")
 
-    # 4 cycles de plus : le banc (4 personnes) est épuisé → déstaffing.
-    # (35 heures virtuelles après l'époque, le jour a tourné : on borne par ≥.)
-    _avancer(client, 8 * 4)
-    en_intercontrat = [
+    # 4 more cycles: the bench (4 people) is exhausted → destaffing.
+    # (35 virtual hours past the epoch, the day has rolled over: bound by ≥.)
+    _advance(client, 8 * 4)
+    on_bench = [
         r
         for r in boond_state.dataset["resources"]
         if r["attributes"]["availability"] == "immediate"
         and r["attributes"]["realAvailability"] >= "2026-07-15"
     ]
-    assert en_intercontrat, "au moins un consultant doit avoir été déstaffé"
-    destaffe = en_intercontrat[0]
-    missions_closes = [
+    assert on_bench, "at least one consultant must have been destaffed"
+    destaffed = on_bench[0]
+    closed_deliveries = [
         m
         for m in boond_state.dataset["deliveries"]
         if m["attributes"]["state"] == 2
-        and m["attributes"]["endDate"] == destaffe["attributes"]["realAvailability"]
-        and m["relationships"]["dependsOn"]["data"]["id"] == destaffe["id"]
+        and m["attributes"]["endDate"] == destaffed["attributes"]["realAvailability"]
+        and m["relationships"]["dependsOn"]["data"]["id"] == destaffed["id"]
     ]
-    assert missions_closes, "la mission du déstaffé doit être close à la date de l'événement"
+    assert closed_deliveries, "the destaffed consultant's delivery must close at the event's date"
 
 
-def test_facture_reglee_et_transaction_bancaire(client):
-    transactions_avant = _rows(client, "banking-transactions")
-    reglees_avant = _rows(client, "invoices", period="performedPayment")  # ignoré → total
-    _avancer(client, 4)  # inclut l'événement facture k=3
-    assert _rows(client, "banking-transactions") == transactions_avant + 1
-    corps = client.get("/api/invoices", headers=JWT, params=CURSEUR).json()
-    assert corps["meta"]["totals"]["rows"] == 1
-    facture = corps["data"][0]["attributes"]
-    assert facture["state"] == 2
-    assert facture["performedPaymentDate"] == "2026-07-15"
-    assert reglees_avant  # garde-fou : la collection n'était pas vide
+def test_invoice_settled_and_banking_transaction(client):
+    transactions_before = _rows(client, "banking-transactions")
+    settled_before = _rows(client, "invoices", period="performedPayment")  # ignored → total
+    _advance(client, 4)  # includes the invoice event k=3
+    assert _rows(client, "banking-transactions") == transactions_before + 1
+    body = client.get("/api/invoices", headers=JWT, params=CURSOR).json()
+    assert body["meta"]["totals"]["rows"] == 1
+    invoice = body["data"][0]["attributes"]
+    assert invoice["state"] == 2
+    assert invoice["performedPaymentDate"] == "2026-07-15"
+    assert settled_before  # guard rail: the collection was not empty
 
 
-def test_extraction_incrementale_de_bout_en_bout(client, monkeypatch):
-    """Le scénario cible : snapshot complet, curseur, delta — rien d'autre.
+def test_end_to_end_incremental_extraction(client, monkeypatch):
+    """The target scenario: full snapshot, cursor, delta — nothing else.
 
-    C'est LE flux que les consommateurs (ophelie, insights360) rejoueront
-    contre ce mock : la passe incrémentale ne doit revoir QUE ce qui a bougé.
+    This is THE flow consumers (ophelie, insights360) will replay against this
+    mock: the incremental pass must see ONLY what has moved.
     """
     collections = ("resources", "contacts", "actions", "invoices", "opportunities")
     snapshot = {c: _rows(client, c) for c in collections}
-    assert all(_rows(client, c, **CURSEUR) == 0 for c in collections)
+    assert all(_rows(client, c, **CURSOR) == 0 for c in collections)
 
-    _avancer(client, 8)  # un cycle complet d'événements
+    _advance(client, 8)  # one full cycle of events
 
-    delta = {c: _rows(client, c, **CURSEUR) for c in collections}
-    assert delta["actions"] >= 3, "les nouvelles actions portent le gros du delta"
-    assert delta["contacts"] >= 1, "un contact a été créé chez un client"
-    assert delta["resources"] >= 2, "profil enrichi + staffing"
-    assert delta["invoices"] == 1, "une facture a été réglée"
-    assert delta["opportunities"] == 1, "une opportunité a avancé"
+    delta = {c: _rows(client, c, **CURSOR) for c in collections}
+    assert delta["actions"] >= 3, "new actions carry most of the delta"
+    assert delta["contacts"] >= 1, "a contact was created at a client"
+    assert delta["resources"] >= 2, "enriched profile + staffing"
+    assert delta["invoices"] == 1, "an invoice was settled"
+    assert delta["opportunities"] == 1, "an opportunity progressed"
 
-    # Le total a bougé là où des entités sont NÉES, pas ailleurs.
+    # The total moved where entities were BORN, nowhere else.
     assert _rows(client, "actions") > snapshot["actions"]
     assert _rows(client, "resources") == snapshot["resources"]
 
-    # L'affordance fine (updatedSince, ISO-8601), rallumée à la demande, voit
-    # le même delta — le fournisseur, lui, l'ignore.
+    # The fine-grained affordance (updatedSince, ISO-8601), turned back on on
+    # request, sees the same delta — the vendor itself ignores it.
     monkeypatch.setattr(mock.settings, "updated_since_enabled", True)
-    fin = client.get(
+    result = client.get(
         "/api/actions",
         headers=JWT,
         params={"updatedSince": "2026-07-14T00:00:00+0200", "maxResults": 500},
     ).json()
-    assert fin["meta"]["totals"]["rows"] == delta["actions"]
+    assert result["meta"]["totals"]["rows"] == delta["actions"]
 
 
-def test_la_chronologie_est_deterministe(client):
-    """Même graine, même horloge → même vie d'entreprise, au détail près.
+def test_the_timeline_is_deterministic(client):
+    """Same seed, same clock → same company life, down to the detail.
 
-    C'est ce qui permet de rejouer un incident d'extraction : la séquence ne
-    dépend que de la graine, jamais de l'heure de lancement des tests.
+    This is what lets an extraction incident be replayed: the sequence only
+    depends on the seed, never on when the tests were launched.
     """
-    _avancer(client, 8)
-    premier = client.get("/__admin/state", headers=ADMIN).json()["evolution"]["journal"]
+    _advance(client, 8)
+    first = client.get("/__admin/state", headers=ADMIN).json()["evolution"]["journal"]
 
     mock.state.reset()
-    _avancer(client, 8)
+    _advance(client, 8)
     second = client.get("/__admin/state", headers=ADMIN).json()["evolution"]["journal"]
 
-    assert premier == second
+    assert first == second
 
 
-def test_le_journal_expose_le_delta(client):
-    _avancer(client, 3)
+def test_the_journal_exposes_the_delta(client):
+    _advance(client, 3)
     evolution = client.get("/__admin/state", headers=ADMIN).json()["evolution"]
     assert evolution["applied"] == 3
-    assert [e["kind"] for e in evolution["journal"]] == ["action", "profil", "staffing"]
+    assert [e["kind"] for e in evolution["journal"]] == ["action", "profile", "staffing"]
     assert all(e["at"].startswith("2026-07-15") for e in evolution["journal"])
 
 
-def test_evolution_desactivable(client, monkeypatch):
+def test_evolution_can_be_disabled(client, monkeypatch):
     monkeypatch.setattr(mock.settings, "evolution_enabled", False)
-    avant = _rows(client, "actions")
-    _avancer(client, 5)
-    assert _rows(client, "actions") == avant
+    before = _rows(client, "actions")
+    _advance(client, 5)
+    assert _rows(client, "actions") == before
 
 
-def test_le_reset_rearme_la_chronologie(client):
-    _avancer(client, 2)
+def test_reset_rearms_the_timeline(client):
+    _advance(client, 2)
     assert client.get("/__admin/state", headers=ADMIN).json()["evolution"]["applied"] == 2
     client.post("/__admin/reset", headers=ADMIN)
     assert client.get("/__admin/state", headers=ADMIN).json()["evolution"]["applied"] == 0
-    assert _rows(client, "resources", **CURSEUR) == 0
+    assert _rows(client, "resources", **CURSOR) == 0

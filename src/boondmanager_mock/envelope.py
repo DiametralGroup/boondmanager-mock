@@ -1,26 +1,26 @@
-"""Enveloppes, pagination, tri, filtre incrémental — et les pannes associées.
+"""Envelopes, pagination, sorting, incremental filter — and their failures.
 
-L'enveloppe suit le schéma OFFICIEL (doc.boondmanager.com, RAML) :
+The envelope follows the OFFICIAL schema (doc.boondmanager.com, RAML):
 
-    liste  : {"data": [...], "included": [...], "meta": {"totals": {"rows": N},
+    list   : {"data": [...], "included": [...], "meta": {"totals": {"rows": N},
               "version": "…", "isLogged": true, "language": "fr"}}
-    détail : {"data": {...}, "included": [...], "meta": {version, isLogged, language}}
+    detail : {"data": {...}, "included": [...], "meta": {version, isLogged, language}}
 
-`included` n'apparaît que sur les modules dont le schéma le déclare, et
-seulement s'il est non vide.
+`included` only appears on modules whose schema declares it, and only when
+non-empty.
 
-Au-delà du chemin heureux, ce module reproduit ce que l'API réelle fait, tel
-que sondé le 2026-09-29 :
-  • la pagination `page`/`maxResults` : défaut 30, maximum 500 (100 sur
-    `/actions`) et, au-delà du maximum, un retour SILENCIEUX aux 30 lignes par
-    défaut ; `agencies`, `poles` et `business-units` ne se paginent pas ;
-  • le tri : seules les clés du `sortList` officiel sont honorées, et l'ordre
-    par défaut est une date décroissante sur les collections mesurées ;
-  • les filtres de période officiels (`period=updated|created`, et
-    `period=inProgress` sur `/times`) ;
-  • en opt-in : l'ordre INSTABLE, la dérive de pagination (un enregistrement
-    rendu sur deux pages) et le filtre `updatedSince`, que le fournisseur
-    ignore (affordance du mock, cf. plus bas).
+Beyond the happy path, this module reproduces what the real API does, as
+probed on 2026-09-29:
+  • `page`/`maxResults` pagination: default 30, max 500 (100 on `/actions`)
+    and, beyond the max, a SILENT fallback to the default 30 rows;
+    `agencies`, `poles` and `business-units` are not paginated;
+  • sorting: only the official `sortList` keys are honored, and the default
+    order is a descending date on the measured collections;
+  • the official period filters (`period=updated|created`, and
+    `period=inProgress` on `/times`);
+  • opt-in: UNSTABLE order, page drift (a record rendered on two pages) and
+    the `updatedSince` filter, which the vendor ignores (mock affordance, see
+    below).
 """
 
 from __future__ import annotations
@@ -31,111 +31,111 @@ from typing import Any
 from .injection import engine
 from .settings import settings
 
-#: Les versions que `meta` annonce — relevées sur la vraie API le 2026-07-31.
+#: The versions `meta` announces — observed on the real API on 2026-07-31.
 VERSION_BOOND = "9.1.78.1"
 VERSION_ANDROID_MIN = "2.31.5"
 VERSION_IOS_MIN = "2.28.6"
 
 
-def _horodatage_ms() -> int:
-    """`meta.timestamp` — epoch millisecondes, DÉTERMINISTE.
+def _timestamp_ms() -> int:
+    """`meta.timestamp` — epoch milliseconds, DETERMINISTIC.
 
-    Dérivé de l'horloge VIRTUELLE : époque du jeu de données + temps écoulé
-    depuis le reset (y compris les avances de /__admin/clock). Deux serveurs au
-    même âge rendent le même timestamp — la propriété que le réel n'a pas, et
-    que le mock garde pour rester rejouable.
+    Derived from the VIRTUAL clock: the dataset's epoch plus elapsed time
+    since the reset (including /__admin/clock advances). Two servers at the
+    same age render the same timestamp — the property the real API lacks, and
+    that the mock keeps to stay replayable.
     """
-    from .evolution import EPOQUE
+    from .evolution import EPOCH
     from .state import state
 
-    ecoule = engine.now() - state.evolution.demarrage
-    return int(EPOQUE.timestamp() * 1000 + ecoule * 1000)
+    elapsed = engine.now() - state.evolution.started_at
+    return int(EPOCH.timestamp() * 1000 + elapsed * 1000)
 
 
-def _meta_commun(connecte: bool) -> dict[str, Any]:
-    """Le socle `meta` observé sur la vraie API — présent MÊME en erreur.
+def _common_meta(logged_in: bool) -> dict[str, Any]:
+    """The `meta` baseline observed on the real API — present EVEN on error.
 
-    Hors session (401, JWT invalide, route inconnue) : `isLogged: false`,
-    `language: "en"`, sans `login` ni `customer`.
+    Outside a session (401, invalid JWT, unknown route): `isLogged: false`,
+    `language: "en"`, with no `login` nor `customer`.
     """
     meta: dict[str, Any] = {
         "version": VERSION_BOOND,
         "androidMinVersion": VERSION_ANDROID_MIN,
         "iosMinVersion": VERSION_IOS_MIN,
-        "isLogged": connecte,
-        "language": "fr" if connecte else "en",
-        "timestamp": _horodatage_ms(),
+        "isLogged": logged_in,
+        "language": "fr" if logged_in else "en",
+        "timestamp": _timestamp_ms(),
     }
-    if connecte:
+    if logged_in:
         meta["login"] = settings.basic_user
         meta["customer"] = settings.customer
     return meta
 
 
-def meta_erreur(connecte: bool) -> dict[str, Any]:
-    """Le meta des réponses d'erreur (importé par errors.py)."""
-    return _meta_commun(connecte)
+def error_meta(logged_in: bool) -> dict[str, Any]:
+    """The meta of error responses (imported by errors.py)."""
+    return _common_meta(logged_in)
 
 
-# ┌─ INCRÉMENTAL : LA VOIE OFFICIELLE, PUIS L'AFFORDANCE ──────────────────────┐
-# │ La voie OFFICIELLE (RAML) : `period=updated&startDate=AAAA-MM-JJ&endDate=…`│
-# │ — documentée sur 11 modules (actions, candidates, companies, contacts,    │
-# │ invoices, opportunities, orders, payments, projects, purchases,           │
-# │ resources), granularité JOUR. Sondée le 2026-09-29 : honorée sur les 11,  │
-# │ y compris /orders, qui ne rend pourtant pas `updateDate`. `period=created`│
-# │ fait de même sur la date de création.                                     │
+# ┌─ INCREMENTAL: THE OFFICIAL PATH, THEN THE AFFORDANCE ───────────────────────┐
+# │ The OFFICIAL path (RAML): `period=updated&startDate=YYYY-MM-DD&endDate=…`  │
+# │ — documented on 11 modules (actions, candidates, companies, contacts,      │
+# │ invoices, opportunities, orders, payments, projects, purchases,            │
+# │ resources), DAY granularity. Probed 2026-09-29: honored on all 11,         │
+# │ including /orders, which does not even render `updateDate`. `period=created`│
+# │ does the same on the creation date.                                        │
 # │                                                                            │
-# │ Sur `/times`, la seule valeur documentée est `period=inProgress`. Elle    │
-# │ filtre sur la DATE DE LA LIGNE (`startDate`), et elle marche : 111 745    │
-# │ lignes au total, 2 716 pour septembre 2026.                               │
+# │ On `/times`, the only documented value is `period=inProgress`. It filters  │
+# │ on the ROW'S DATE (`startDate`), and it works: 111 745 rows in total,      │
+# │ 2 716 for September 2026.                                                   │
 # │                                                                            │
-# │ Hors de ces cas, le mock applique `period=updated|created` sur ses autres │
-# │ collections (sur-ensemble, non mesuré) ; les autres valeurs de `period`   │
-# │ et les filtres métier (`flags`, `states`…) sont ACCEPTÉS et ignorés.      │
+# │ Outside these cases, the mock applies `period=updated|created` on its      │
+# │ other collections (a superset, unmeasured); other `period` values and      │
+# │ business filters (`flags`, `states`…) are ACCEPTED and ignored.            │
 # │                                                                            │
-# │ L'affordance `updatedSince=<ISO-8601>` (ou `filter[updateDate][gte]`)     │
-# │ n'existe PAS chez le fournisseur : il l'accepte et l'ignore, totaux       │
-# │ identiques sur les 11 modules. Désactivée par défaut depuis 0.11.0 ;      │
-# │ `BOOND_MOCK_UPDATED_SINCE=true` la rallume.                               │
+# │ The `updatedSince=<ISO-8601>` affordance (or `filter[updateDate][gte]`)    │
+# │ does NOT exist at the vendor: it accepts it and ignores it, identical      │
+# │ totals on the 11 modules. Disabled by default since 0.11.0;                │
+# │ `BOOND_MOCK_UPDATED_SINCE=true` turns it back on.                          │
 # └─────────────────────────────────────────────────────────────────────────────┘
 UPDATED_SINCE_PARAMS = ("updatedSince", "filter[updateDate][gte]")
 
 UPDATED_AT_FIELD = "updateDate"
 
-#: `period` → champ filtré, bornes [startDate, endDate] inclusives au jour.
-PERIODES_SUPPORTEES = {
+#: `period` → filtered field, [startDate, endDate] bounds, inclusive by day.
+SUPPORTED_PERIODS = {
     "updated": "updateDate",
     "created": "creationDate",
-    # /times : la date de la ligne de temps, pas une date de modification.
+    # /times: the time row's date, not a modification date.
     "inProgress": "startDate",
 }
 
-#: Valeurs de `period` honorées par défaut : le sur-ensemble du mock.
-PERIODES_PAR_DEFAUT: tuple[str, ...] = ("updated", "created")
+#: `period` values honored by default: the mock's superset.
+DEFAULT_PERIODS: tuple[str, ...] = ("updated", "created")
 
 
 def apply_period(
     items: list[dict[str, Any]],
     params: dict[str, str],
-    periodes: tuple[str, ...] = PERIODES_PAR_DEFAUT,
+    periods: tuple[str, ...] = DEFAULT_PERIODS,
 ) -> list[dict[str, Any]]:
-    """Les filtres de période OFFICIELS : `period=<valeur>` + bornes en jours.
+    """The OFFICIAL period filters: `period=<value>` + day bounds.
 
-    Seules les valeurs de `periodes` s'appliquent : une autre est acceptée et
-    IGNORÉE, comme le fait le fournisseur. Un item sans le champ visé est exclu
-    quand le filtre est actif — une ligne sans date de création ne peut pas
-    être « créée entre deux dates ».
+    Only the values in `periods` apply: any other is accepted and IGNORED,
+    like the vendor does. An item without the targeted field is excluded when
+    the filter is active — a row without a creation date cannot be "created
+    between two dates".
     """
-    periode = params.get("period", "")
-    champ = PERIODES_SUPPORTEES.get(periode) if periode in periodes else None
-    if champ is None:
+    period = params.get("period", "")
+    field_name = SUPPORTED_PERIODS.get(period) if period in periods else None
+    if field_name is None:
         return items
-    debut = params.get("startDate", "0000-00-00")
-    fin = params.get("endDate", "9999-12-31")
+    start = params.get("startDate", "0000-00-00")
+    end = params.get("endDate", "9999-12-31")
     return [
         i
         for i in items
-        if (jour := str(i.get("attributes", {}).get(champ, ""))[:10]) and debut <= jour <= fin
+        if (day := str(i.get("attributes", {}).get(field_name, ""))[:10]) and start <= day <= end
     ]
 
 
@@ -144,11 +144,11 @@ def apply_keywords(
     keywords: str,
     blobs: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Recherche plein-texte grossière — suffisante pour un mock.
+    """Coarse full-text search — good enough for a mock.
 
-    `blobs` : le texte de recherche précalculé par item (state.blobs), aligné
-    sur la collection COMPLÈTE — évite de resérialiser le dataset à chaque
-    requête."""
+    `blobs`: the precomputed search text per item (state.blobs), aligned with
+    the FULL collection — avoids re-serializing the dataset on every
+    request."""
     if not keywords:
         return items
     needle = keywords.strip().lower()
@@ -158,17 +158,17 @@ def apply_keywords(
 
 
 def apply_incremental(items: list[dict[str, Any]], since: str | None) -> list[dict[str, Any]]:
-    """Filtre sur l'horodatage de mise à jour : AFFORDANCE du mock.
+    """Filter on the update timestamp: a mock AFFORDANCE.
 
-    Le fournisseur accepte `updatedSince` et l'ignore (sondé le 2026-09-29) :
-    le filtre ne s'applique donc que si `BOOND_MOCK_UPDATED_SINCE=true`.
-    Appliqué d'office, il a rendu vert un client qui relisait en production
-    toutes ses collections à chaque run.
+    The vendor accepts `updatedSince` and ignores it (probed 2026-09-29): the
+    filter therefore only applies if `BOOND_MOCK_UPDATED_SINCE=true`. Applied
+    unconditionally, it made a client that re-read all its collections in
+    production on every run look green.
 
-    Comparaison lexicographique : les horodatages sont ISO-8601 (fuseau
-    Europe/Paris, décalage sans deux-points, comme la vraie API), donc l'ordre
-    lexicographique et l'ordre chronologique coïncident au jour près — assez
-    pour un mock, sans parsing ni mode de défaillance sur une date malformée.
+    Lexicographic comparison: timestamps are ISO-8601 (Europe/Paris timezone,
+    offset without a colon, like the real API), so lexicographic and
+    chronological order coincide to the day — good enough for a mock, with no
+    parsing nor failure mode on a malformed date.
     """
     if not since or not settings.updated_since_enabled:
         return items
@@ -182,11 +182,11 @@ def extract_since(params: dict[str, str]) -> str | None:
     return None
 
 
-#: Les clés de tri OFFICIELLES : le `sortList` du trait `sortablePaginable`,
-#: par module (RAML téléchargée le 2026-09-29). Une clé absente est ignorée
-#: sans erreur — sondé : `sort=id` et une clé inventée rendent l'ordre par
-#: défaut, en 200. Les modules absents (agencies, poles, business-units) n'ont
-#: pas de tri au contrat.
+#: The OFFICIAL sort keys: the `sortablePaginable` trait's `sortList`, per
+#: module (RAML pulled 2026-09-29). An absent key is ignored without error —
+#: probed: `sort=id` and a made-up key both render the default order, with a
+#: 200. Absent modules (agencies, poles, business-units) have no sort in the
+#: contract.
 SORT_LISTS: dict[str, frozenset[str]] = {
     "absences": frozenset({"resource.lastName"}),
     "actions": frozenset(
@@ -275,59 +275,58 @@ SORT_LISTS: dict[str, frozenset[str]] = {
     "times-reports": frozenset({"term", "state", "resource.lastName", "closed"}),
 }  # fmt: skip
 
-#: Clés du `sortList` que le fournisseur ignore pourtant (sondé le 2026-09-29) :
-#: `/resources?sort=creationDate` rend l'ordre par défaut, en asc comme en desc.
-TRIS_IGNORES: frozenset[tuple[str, str]] = frozenset({("resources", "creationDate")})
+#: `sortList` keys the vendor ignores anyway (probed 2026-09-29):
+#: `/resources?sort=creationDate` renders the default order, both asc and desc.
+IGNORED_SORTS: frozenset[tuple[str, str]] = frozenset({("resources", "creationDate")})
 
-#: Clés dont le fournisseur ignore `order` : toujours décroissant (sondé le
-#: 2026-09-29 — `/resources?sort=updateDate&order=asc` rend la même séquence
-#: qu'en desc, alors que companies et actions honorent les deux sens).
-TRIS_TOUJOURS_DECROISSANTS: frozenset[tuple[str, str]] = frozenset({("resources", "updateDate")})
+#: Keys for which the vendor ignores `order`: always descending (probed
+#: 2026-09-29 — `/resources?sort=updateDate&order=asc` renders the same
+#: sequence as desc, while companies and actions honor both directions).
+ALWAYS_DESCENDING_SORTS: frozenset[tuple[str, str]] = frozenset({("resources", "updateDate")})
 
-#: L'ordre SANS tri honoré, mesuré le 2026-09-29 : une date DÉCROISSANTE.
+#: The order honored WITHOUT a sort, measured 2026-09-29: a DESCENDING date.
 #:
-#: ┌─ POURQUOI C'EST IMPORTANT POUR UN CONSOMMATEUR QUI PAGINE ────────────────┐
-#: │ Sur une liste triée par date de modification, un enregistrement modifié  │
-#: │ pendant le parcours remonte en tête : les pages suivantes glissent d'un  │
-#: │ cran, et une ligne est servie deux fois. Une suppression fait l'inverse  │
-#: │ et fait sauter une ligne. Le mock servait les identifiants dans l'ordre  │
-#: │ croissant, ce qui masquait tout ça — et laissait croire qu'un `sort=id`, │
-#: │ ignoré par le fournisseur, stabilisait la pagination.                    │
+#: ┌─ WHY THIS MATTERS FOR A CONSUMER THAT PAGINATES ──────────────────────────┐
+#: │ On a list sorted by modification date, a record modified during the walk │
+#: │ moves to the front: subsequent pages shift by one, and a row is served   │
+#: │ twice. A deletion does the opposite and skips a row. The mock used to    │
+#: │ serve ids in ascending order, which masked all of this — and suggested   │
+#: │ that `sort=id`, ignored by the vendor, stabilized pagination.            │
 #: └───────────────────────────────────────────────────────────────────────────┘
-#: Les collections absentes n'ont pas été mesurées : ordre d'insertion, stable.
-ORDRE_PAR_DEFAUT: dict[str, str] = {
+#: Absent collections have not been measured: insertion order, stable.
+DEFAULT_ORDER: dict[str, str] = {
     "resources": "updateDate",
     "companies": "updateDate",
     "actions": "startDate",
 }
 
 
-def _valeur_triable(item: dict[str, Any], chemin: str) -> tuple[int, float, str]:
-    """Clé de tri, chemin pointé accepté (`workUnitType.reference`).
+def _sortable_value(item: dict[str, Any], path: str) -> tuple[int, float, str]:
+    """Sort key, dotted path accepted (`workUnitType.reference`).
 
-    Un nombre se trie comme un nombre (`10` après `9`), le reste comme du
-    texte ; une valeur absente vaut une chaîne vide."""
-    noeud: Any = item.get("attributes", {})
-    for segment in chemin.split("."):
-        if not isinstance(noeud, dict):
+    A number sorts as a number (`10` after `9`), everything else as text; a
+    missing value counts as an empty string."""
+    node: Any = item.get("attributes", {})
+    for segment in path.split("."):
+        if not isinstance(node, dict):
             return (1, 0.0, "")
-        noeud = noeud.get(segment)
-    if noeud is None:
+        node = node.get(segment)
+    if node is None:
         return (1, 0.0, "")
-    if isinstance(noeud, int | float) and not isinstance(noeud, bool):
-        return (0, float(noeud), "")
-    return (1, 0.0, str(noeud))
+    if isinstance(node, int | float) and not isinstance(node, bool):
+        return (0, float(node), "")
+    return (1, 0.0, str(node))
 
 
-def _tri_honore(collection: str | None, cle: str) -> bool:
-    """La clé `sort` est-elle honorée par le fournisseur sur ce module ?
+def _sort_honored(collection: str | None, key: str) -> bool:
+    """Is the `sort` key honored by the vendor on this module?
 
-    Sans collection nommée (appel interne), toute clé est honorée."""
+    Without a named collection (internal call), every key is honored."""
     if collection is None:
         return True
-    if (collection, cle) in TRIS_IGNORES:
+    if (collection, key) in IGNORED_SORTS:
         return False
-    return cle in SORT_LISTS.get(collection, frozenset())
+    return key in SORT_LISTS.get(collection, frozenset())
 
 
 def apply_order(
@@ -336,51 +335,52 @@ def apply_order(
     request_index: int,
     collection: str | None = None,
 ) -> list[dict[str, Any]]:
-    """L'ordre tel que MESURÉ sur l'API réelle (2026-09-29).
+    """The order as MEASURED on the real API (2026-09-29).
 
-    1. `sort` n'est honoré que s'il figure au `sortList` officiel du module ;
-       sinon il est ignoré sans erreur, comme chez le fournisseur.
-    2. Sans tri honoré, l'ordre par défaut s'applique : une date décroissante
-       sur les collections mesurées (ORDRE_PAR_DEFAUT), l'ordre d'insertion
-       ailleurs. Deux appels identiques rendent la même séquence.
-    3. L'instabilité reste disponible, en OPT-IN, pour éprouver les pipelines
-       (`BOOND_MOCK_STABLE_ORDER=false` ou une injection `unstable_order`).
-       Elle est DÉTERMINISTE dans un test donné — `hash((rang de requête,
-       id))` — donc reproductible.
+    1. `sort` is only honored if it appears in the module's official
+       `sortList`; otherwise it is ignored without error, like the vendor
+       does.
+    2. Without an honored sort, the default order applies: a descending date
+       on the measured collections (DEFAULT_ORDER), insertion order elsewhere.
+       Two identical calls render the same sequence.
+    3. Instability stays available, OPT-IN, to exercise pipelines
+       (`BOOND_MOCK_STABLE_ORDER=false` or an `unstable_order` injection). It
+       is DETERMINISTIC within a given test — `hash((request rank, id))` — so
+       reproducible.
     """
     sort_field = params.get("sort")
-    if sort_field and _tri_honore(collection, sort_field):
-        if (collection, sort_field) in TRIS_TOUJOURS_DECROISSANTS:
+    if sort_field and _sort_honored(collection, sort_field):
+        if (collection, sort_field) in ALWAYS_DESCENDING_SORTS:
             reverse = True
         else:
             reverse = params.get("order", "asc").lower() == "desc"
-        return sorted(items, key=lambda i: _valeur_triable(i, sort_field), reverse=reverse)
+        return sorted(items, key=lambda i: _sortable_value(i, sort_field), reverse=reverse)
 
-    instable = not settings.stable_order or engine.first("unstable_order", "*") is not None
-    if instable:
+    unstable = not settings.stable_order or engine.first("unstable_order", "*") is not None
+    if unstable:
         return sorted(items, key=lambda i: hash((request_index, i.get("id"))))
 
-    if champ := ORDRE_PAR_DEFAUT.get(collection or ""):
-        return sorted(items, key=lambda i: _valeur_triable(i, champ), reverse=True)
+    if field_name := DEFAULT_ORDER.get(collection or ""):
+        return sorted(items, key=lambda i: _sortable_value(i, field_name), reverse=True)
     return items
 
 
 def apply_page_drift(
-    tous: list[dict[str, Any]], page: int, page_size: int, path: str
+    all_items: list[dict[str, Any]], page: int, page_size: int, path: str
 ) -> list[dict[str, Any]] | None:
-    """Simule une donnée qui bouge EN COURS de pagination.
+    """Simulates data that moves WHILE pagination is in progress.
 
-    Le scénario réel : un enregistrement est inséré (ou supprimé) entre la
-    récupération de la page 1 et celle de la page 2. Tout glisse d'un cran, et
-    un enregistrement se retrouve rendu deux fois — ou pas du tout.
+    The real-world scenario: a record is inserted (or deleted) between
+    fetching page 1 and page 2. Everything shifts by one, and a record ends up
+    rendered twice — or not at all.
 
-    C'est la cause classique de duplication silencieuse, et la raison pour
-    laquelle un pipeline doit dédupliquer sur sa clé de merge plutôt que faire
-    confiance à la pagination.
+    This is the classic cause of silent duplication, and the reason a
+    pipeline must deduplicate on its merge key rather than trust pagination.
 
-    Opère sur la liste COMPLÈTE et rend la tranche décalée — ou None si aucune
-    règle ne s'applique. (Le mock d'origine décalait la tranche déjà découpée :
-    `items[:n] + items[n:]`, une identité — la panne ne s'appliquait jamais.)
+    Operates on the FULL list and returns the shifted slice — or None if no
+    rule applies. (The original mock shifted the already-sliced page:
+    `items[:n] + items[n:]`, an identity — the failure never actually
+    applied.)
     """
     rule = engine.first("page_drift", path)
     if rule is None or page <= rule.after_page:
@@ -388,59 +388,59 @@ def apply_page_drift(
     if not rule.consume():
         return None
     if rule.mode == "insert":
-        # Une insertion en amont décale tout vers l'arrière : le dernier
-        # élément de la page précédente réapparaît en tête de celle-ci.
-        debut = max(0, (page - 1) * page_size - 1)
+        # An upstream insertion shifts everything backward: the previous
+        # page's last element reappears at the front of this one.
+        start = max(0, (page - 1) * page_size - 1)
     else:
-        # Une suppression en amont fait tout remonter d'un cran : le premier
-        # élément attendu de cette page a déjà été servi… ou est perdu.
-        debut = (page - 1) * page_size + 1
-    return tous[debut : debut + page_size]
+        # An upstream deletion makes everything move up by one: this page's
+        # expected first element has already been served… or is lost.
+        start = (page - 1) * page_size + 1
+    return all_items[start : start + page_size]
 
 
-#: Plafond de `maxResults` par collection, quand il diffère du plafond général.
+#: `maxResults` cap per collection, when it differs from the general cap.
 #:
-#: ┌─ MESURÉ, PAS SUPPOSÉ — 2026-09-29, contre un tenant de production ────────┐
-#: │ `/actions` honore `maxResults` jusqu'à 100 (100 → 100 lignes) et revient  │
-#: │ aux 30 par défaut dès 101. Ailleurs le plafond est 500 : `/companies`     │
-#: │ rend 500 lignes pour 500, et 30 pour 501.                                 │
+#: ┌─ MEASURED, NOT ASSUMED — 2026-09-29, against a production tenant ────────┐
+#: │ `/actions` honors `maxResults` up to 100 (100 → 100 rows) and falls back │
+#: │ to the default 30 at 101. Elsewhere the cap is 500: `/companies` renders │
+#: │ 500 rows for 500, and 30 for 501.                                        │
 #: │                                                                           │
-#: │ Le relevé du 2026-08-12 en avait conclu que `/actions` IGNORAIT le        │
-#: │ paramètre : la seule valeur testée, 500, dépassait son plafond. Le mock   │
-#: │ rendait donc 30 lignes quoi qu'on demande, et un client qui aurait        │
-#: │ demandé 100 n'avait aucun moyen de voir qu'il aurait été servi : 50 777   │
-#: │ actions font 508 pages à 100, contre 1 693 à 30.                          │
+#: │ The 2026-08-12 survey had concluded that `/actions` IGNORED the          │
+#: │ parameter: the only value tested, 500, exceeded its cap. The mock then   │
+#: │ rendered 30 rows no matter what was asked, and a client that had asked   │
+#: │ for 100 had no way to see it would have been served: 50 777 actions make │
+#: │ 508 pages at 100, against 1 693 at 30.                                   │
 #: └───────────────────────────────────────────────────────────────────────────┘
-PLAFONDS_MAXRESULTS: dict[str, int] = {"actions": 100}
+MAXRESULTS_CAPS: dict[str, int] = {"actions": 100}
 
-#: Modules SANS pagination au contrat (pas de trait `sortablePaginable`) : le
-#: fournisseur ignore `page` et `maxResults` et rend tout (sondé le 2026-09-29 :
-#: 11 agences, 8 pôles, 2 unités, y compris avec `page=2&maxResults=1`).
-COLLECTIONS_NON_PAGINABLES: frozenset[str] = frozenset({"agencies", "poles", "business-units"})
+#: Modules WITHOUT pagination in the contract (no `sortablePaginable` trait):
+#: the vendor ignores `page` and `maxResults` and renders everything (probed
+#: 2026-09-29: 11 agencies, 8 poles, 2 units, even with `page=2&maxResults=1`).
+NON_PAGINATED_COLLECTIONS: frozenset[str] = frozenset({"agencies", "poles", "business-units"})
 
 
 def paginate(
     items: list[dict[str, Any]], params: dict[str, str], collection: str | None = None
 ) -> tuple[list[dict[str, Any]], int, int] | None:
-    """Rend (tranche, page, taille) ou None si les paramètres sont invalides.
+    """Returns (slice, page, size) or None if the parameters are invalid.
 
-    `collection` est le NOM NU de la collection (`actions`, pas `/api/actions`).
-    Il sert aux deux comportements par module : le plafond propre à `/actions`
-    et les modules non paginables. Il reste optionnel.
+    `collection` is the BARE collection name (`actions`, not `/api/actions`).
+    It serves the two per-module behaviors: the `/actions`-specific cap and
+    the non-paginated modules. It stays optional.
 
-    Au-delà du plafond, le fournisseur ne PLAFONNE PAS : il revient en silence
-    à la taille par défaut (30). Pas de 422, pas de signal — un consommateur
-    qui demande trop reçoit moins qu'une page ordinaire.
+    Beyond the cap, the vendor does NOT cap: it silently falls back to the
+    default size (30). No 422, no signal — a consumer asking for too much
+    receives less than an ordinary page.
     """
-    if collection in COLLECTIONS_NON_PAGINABLES:
+    if collection in NON_PAGINATED_COLLECTIONS:
         return items, 1, max(1, len(items))
     try:
         page = max(1, int(params.get("page", 1)))
         requested = int(params.get("maxResults", settings.default_max_results))
     except ValueError:
         return None
-    plafond = PLAFONDS_MAXRESULTS.get(collection or "", settings.max_results_cap)
-    if requested > plafond:
+    cap = MAXRESULTS_CAPS.get(collection or "", settings.max_results_cap)
+    if requested > cap:
         requested = settings.default_max_results
     page_size = max(1, requested)
     start = (page - 1) * page_size
@@ -453,20 +453,20 @@ def envelope(
     included: list[dict[str, Any]] | None = None,
     meta_extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """L'enveloppe de liste — meta complet observé + clés propres au module."""
-    corps: dict[str, Any] = {"data": data}
+    """The list envelope — full observed meta + module-specific keys."""
+    body: dict[str, Any] = {"data": data}
     if included:
-        corps["included"] = included
-    corps["meta"] = {**_meta_commun(True), **(meta_extra or {}), "totals": {"rows": total}}
-    return corps
+        body["included"] = included
+    body["meta"] = {**_common_meta(True), **(meta_extra or {}), "totals": {"rows": total}}
+    return body
 
 
 def envelope_detail(
     item: dict[str, Any], included: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:
-    """L'enveloppe de détail — même `meta`, sans `totals`, comme les profils réels."""
-    corps: dict[str, Any] = {"data": item}
+    """The detail envelope — same `meta`, without `totals`, like real profiles."""
+    body: dict[str, Any] = {"data": item}
     if included:
-        corps["included"] = included
-    corps["meta"] = _meta_commun(True)
-    return corps
+        body["included"] = included
+    body["meta"] = _common_meta(True)
+    return body

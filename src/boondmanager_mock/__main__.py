@@ -1,9 +1,9 @@
-"""Point d'entrée conteneur : `python -m boondmanager_mock`.
+"""Container entry point: `python -m boondmanager_mock`.
 
-Volontairement minimal — pas de CLI, pas d'options. Tout se configure par
-variables d'environnement (cf. settings.py), parce que c'est le seul mécanisme
-qui marche identiquement en docker compose, en Deployment Kubernetes et en
-sidecar Tekton.
+Deliberately minimal — no CLI, no options. Everything is configured through
+environment variables (see settings.py), because that is the only mechanism
+that works identically in docker compose, a Kubernetes Deployment, and a
+Tekton sidecar.
 """
 
 from __future__ import annotations

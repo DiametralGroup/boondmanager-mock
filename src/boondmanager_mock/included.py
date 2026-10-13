@@ -1,25 +1,25 @@
-"""Construction du tableau `included` — formes réduites PAR MODULE.
+"""Building the `included` array — reduced shapes PER MODULE.
 
-La vraie API accompagne `data` d'un tableau `included` : pour chaque relation
-`{id, type}`, l'entité cible y figure sous une forme RÉDUITE — et cette forme
-varie selon le MODULE qui répond. Relevé RAML confirmé par les sondes réelles
-du 2026-07-31 : la `company` incluse par /contacts porte
-`{name, expertiseArea, thumbnail, state}`, celle d'/invoices `{name, thumbnail}` ;
-l'`agency` d'/invoices ajoute `invoicesLockingStates` ; le `project` inclus par
-/invoices porte SEPT relations.
+The real API accompanies `data` with an `included` array: for every `{id,
+type}` relation, the target entity appears there in a REDUCED shape — and
+this shape varies by the responding MODULE. RAML survey confirmed by the real
+probes of 2026-07-31: the `company` included by /contacts carries
+`{name, expertiseArea, thumbnail, state}`, the one from /invoices
+`{name, thumbnail}`; /invoices' `agency` adds `invoicesLockingStates`; the
+`project` included by /invoices carries SEVEN relationships.
 
-Chaque module a donc sa table `{type → (attributs gardés, relations gardées)}` ;
-un type absent de la table du module n'est PAS inclus (liste blanche stricte,
-comme les schémas officiels). La clôture est transitive sur les relations
-gardées, avec déduplication par (type, id).
+Each module therefore has its own `{type → (kept attributes, kept
+relationships)}` table; a type absent from a module's table is NOT included
+(strict whitelist, like the official schemas). Closure is transitive over kept
+relationships, deduplicated by (type, id).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-#: type JSON:API → clé de collection dans le dataset.
-TYPE_VERS_CLE: dict[str, str] = {
+#: JSON:API type → collection key in the dataset.
+TYPE_TO_KEY: dict[str, str] = {
     "absence": "absences",
     "action": "actions",
     "agency": "agencies",
@@ -46,33 +46,32 @@ TYPE_VERS_CLE: dict[str, str] = {
     "timesreport": "times_reports",
 }
 
-Forme = tuple[tuple[str, ...], tuple[str, ...]]
+Shape = tuple[tuple[str, ...], tuple[str, ...]]
 
-_PERSONNE: Forme = (("firstName", "lastName"), ())
-_PERSONNE_RICHE: Forme = (("firstName", "lastName", "email1", "phone1", "phone2", "thumbnail"), ())
-_NOM: Forme = (("name",), ())
-_ACTION: Forme = (("startDate", "typeOf", "text"), ())
-#: ┌─ LE CONTRAT DANS `included` N'EST PAS RÉDUIT ─────────────────────────────┐
-#: │ Il ne portait que trois attributs, sur l'idée — écrite dans le docstring  │
-#: │ de la route — qu'`included` livre une « forme réduite » et que le détail  │
-#: │ vit sur `GET /contracts/{id}`.                                            │
-#: │                                                                            │
-#: │ Sondé le 2026-08-13 contre la production : `/resources/{id}/              │
-#: │ administrative` rend les SEIZE attributs du contrat dans `included`,      │
-#: │ `monthlySalary` compris et renseigné. La forme réduite était une          │
-#: │ invention du mock.                                                        │
-#: │                                                                            │
-#: │ Ce que ça coûtait : `GET /contracts` répond 405 chez le fournisseur, donc │
-#: │ `included` est le SEUL chemin praticable vers la rémunération. Un         │
-#: │ consommateur qui s'y fie n'aurait rien trouvé en CI, et aurait conclu     │
-#: │ — comme SPEC-DEVIATIONS #5 l'a fait — qu'aucun endpoint de rémunération   │
-#: │ n'existe chez BoondManager.                                               │
-#: │                                                                            │
-#: │ ⚠️ Ces champs sont de la donnée RH. Le mock les sert parce que le          │
-#: │    fournisseur les sert ; c'est au CONSOMMATEUR de minimiser à            │
-#: │    l'extraction, et insights360 le fait par liste blanche.                │
-#: └────────────────────────────────────────────────────────────────────────────┘
-_CONTRAT: Forme = (
+_PERSON: Shape = (("firstName", "lastName"), ())
+_RICH_PERSON: Shape = (("firstName", "lastName", "email1", "phone1", "phone2", "thumbnail"), ())
+_NAME: Shape = (("name",), ())
+_ACTION: Shape = (("startDate", "typeOf", "text"), ())
+#: ┌─ THE CONTRACT IN `included` IS NOT REDUCED ───────────────────────────────┐
+#: │ It used to carry only three attributes, on the idea — written in the     │
+#: │ route's docstring — that `included` delivers a "reduced shape" and that  │
+#: │ the detail lives on `GET /contracts/{id}`.                               │
+#: │                                                                           │
+#: │ Probed 2026-08-13 against production: `/resources/{id}/administrative`   │
+#: │ renders the contract's SIXTEEN attributes in `included`, `monthlySalary` │
+#: │ included and filled. The reduced shape was a mock invention.             │
+#: │                                                                           │
+#: │ What it cost: `GET /contracts` answers 405 at the vendor, so `included`  │
+#: │ is the ONLY practicable path to compensation. A consumer relying on it   │
+#: │ would have found nothing in CI, and would have concluded — as            │
+#: │ SPEC-DEVIATIONS #5 did — that no compensation endpoint exists at         │
+#: │ BoondManager.                                                            │
+#: │                                                                           │
+#: │ ⚠️ These fields are HR data. The mock serves them because the vendor      │
+#: │    serves them; it is up to the CONSUMER to minimize at extraction time, │
+#: │    and insights360 does so via a whitelist.                              │
+#: └───────────────────────────────────────────────────────────────────────────┘
+_CONTRACT: Shape = (
     (
         "typeOf",
         "startDate",
@@ -94,19 +93,19 @@ _CONTRAT: Forme = (
     ("agency",),
 )
 
-#: module (clé de dataset, ou `<clé>/profil` pour les détails) → {type → forme}.
-#: Valeurs relevées dans les blocs `included` des schémas search/profile
-#: officiels — cf. docs/UNVERIFIED-FIELDS.md pour la provenance.
-FORMES_PAR_MODULE: dict[str, dict[str, Forme]] = {
+#: module (dataset key, or `<key>/profile` for details) → {type → shape}.
+#: Values observed in the official search/profile schemas' `included` blocks —
+#: see docs/UNVERIFIED-FIELDS.md for provenance.
+SHAPES_BY_MODULE: dict[str, dict[str, Shape]] = {
     "actions": {
-        "candidate": _PERSONNE_RICHE,
-        "resource": _PERSONNE,
+        "candidate": _RICH_PERSON,
+        "resource": _PERSON,
         "company": (("name", "phone1", "thumbnail"), ()),
         "contact": (
             ("firstName", "lastName", "email1", "phone1", "phone2", "thumbnail"),
             ("company",),
         ),
-        "document": _NOM,
+        "document": _NAME,
         "invoice": (("reference",), ("order",)),
         "opportunity": (("reference", "title"), ("contact", "company")),
         "order": (("reference", "number"), ("project",)),
@@ -116,23 +115,23 @@ FORMES_PAR_MODULE: dict[str, dict[str, Forme]] = {
         "bankingaccount": (("name", "title"), ("connection",)),
         "bankingconnection": (("bankName",), ()),
     },
-    "business_units": {"resource": _PERSONNE},
-    "candidates": {"action": _ACTION, "agency": _NOM, "pole": _NOM, "resource": _PERSONNE},
-    "companies": {"action": _ACTION, "agency": _NOM, "pole": _NOM, "resource": _PERSONNE},
+    "business_units": {"resource": _PERSON},
+    "candidates": {"action": _ACTION, "agency": _NAME, "pole": _NAME, "resource": _PERSON},
+    "companies": {"action": _ACTION, "agency": _NAME, "pole": _NAME, "resource": _PERSON},
     "contacts": {
         "action": _ACTION,
-        "agency": _NOM,
+        "agency": _NAME,
         "company": (("name", "expertiseArea", "thumbnail", "state"), ()),
-        "pole": _NOM,
-        "resource": _PERSONNE,
+        "pole": _NAME,
+        "resource": _PERSON,
     },
     "invoices": {
         "agency": (("name", "invoicesLockingStates"), ()),
         "company": (("name", "thumbnail"), ()),
-        "contact": _PERSONNE,
+        "contact": _PERSON,
         "opportunity": (("title",), ()),
         "order": (("number", "reference"), ("mainManager", "project")),
-        "pole": _NOM,
+        "pole": _NAME,
         "project": (
             ("reference", "typeOf", "mode"),
             (
@@ -145,22 +144,22 @@ FORMES_PAR_MODULE: dict[str, dict[str, Forme]] = {
                 "intermediaryCompany",
             ),
         ),
-        "resource": _PERSONNE,
+        "resource": _PERSON,
         "schedule": (("date", "title"), ()),
     },
     "opportunities": {
-        "agency": _NOM,
+        "agency": _NAME,
         "company": (("name", "thumbnail", "canReadCompany"), ()),
         "contact": (("firstName", "lastName", "thumbnail", "canReadContact"), ()),
-        "pole": _NOM,
-        "resource": _PERSONNE,
+        "pole": _NAME,
+        "resource": _PERSON,
     },
     "orders": {
-        "agency": _NOM,
+        "agency": _NAME,
         "company": (("name", "thumbnail"), ()),
-        "contact": _PERSONNE,
+        "contact": _PERSON,
         "opportunity": (("title",), ()),
-        "pole": _NOM,
+        "pole": _NAME,
         "project": (
             (
                 "reference",
@@ -181,14 +180,14 @@ FORMES_PAR_MODULE: dict[str, dict[str, Forme]] = {
                 "pole",
             ),
         ),
-        "resource": _PERSONNE,
+        "resource": _PERSON,
     },
     "payments": {
-        "agency": _NOM,
-        "company": _NOM,
-        "contact": _PERSONNE,
+        "agency": _NAME,
+        "company": _NAME,
+        "contact": _PERSON,
         "delivery": (("title",), ("dependsOn",)),
-        "pole": _NOM,
+        "pole": _NAME,
         "project": (("reference",), ()),
         "purchase": (
             (
@@ -203,85 +202,86 @@ FORMES_PAR_MODULE: dict[str, dict[str, Forme]] = {
             ),
             ("mainManager", "project", "delivery", "contact", "company", "agency", "pole"),
         ),
-        "resource": _PERSONNE,
+        "resource": _PERSON,
     },
     "projects": {
-        "agency": _NOM,
+        "agency": _NAME,
         "company": (("name", "thumbnail", "canReadCompany"), ()),
         "contact": (("firstName", "lastName", "canReadContact"), ()),
         "opportunity": (("title",), ()),
-        "pole": _NOM,
-        "resource": _PERSONNE,
+        "pole": _NAME,
+        "resource": _PERSON,
     },
     "purchases": {
-        "agency": _NOM,
-        "company": _NOM,
-        "contact": _PERSONNE,
+        "agency": _NAME,
+        "company": _NAME,
+        "contact": _PERSON,
         "delivery": (("title",), ("dependsOn",)),
-        "pole": _NOM,
+        "pole": _NAME,
         "project": (("reference",), ()),
-        "resource": _PERSONNE,
+        "resource": _PERSON,
     },
-    "resources": {"action": _ACTION, "agency": _NOM, "pole": _NOM, "resource": _PERSONNE},
+    "resources": {"action": _ACTION, "agency": _NAME, "pole": _NAME, "resource": _PERSON},
     "times": {
         "agency": (("name", "workUnitRate"), ()),
         "batch": (("title",), ()),
-        "company": _NOM,
+        "company": _NAME,
         "delivery": (("title",), ()),
         "project": (("reference",), ("company",)),
         "resource": (("firstName", "lastName", "workUnitRate"), ()),
         "timesreport": (("term", "state", "workUnitRate"), ("agency", "resource")),
     },
-    "times_reports": {"agency": _NOM, "resource": _PERSONNE},
-    # ── Détails (profils) — listes blanches observées/RAML ───────────────────
-    "resources/profil": {"agency": _NOM, "contract": _CONTRAT},
-    "projects/profil": {
-        "agency": _NOM,
+    "times_reports": {"agency": _NAME, "resource": _PERSON},
+    # ── Details (profiles) — whitelists observed/RAML ────────────────────────
+    "resources/profile": {"agency": _NAME, "contract": _CONTRACT},
+    "projects/profile": {
+        "agency": _NAME,
         "company": (("name", "thumbnail", "canReadCompany"), ()),
         "opportunity": (("title",), ()),
     },
-    "contracts/profil": {
-        "agency": _NOM,
+    "contracts/profile": {
+        "agency": _NAME,
         "contract": (("typeOf", "startDate", "endDate"), ()),
-        "document": _NOM,
-        "resource": _PERSONNE,
+        "document": _NAME,
+        "resource": _PERSON,
     },
-    "deliveries/profil": {
-        "agency": _NOM,
-        "company": _NOM,
-        "contact": _PERSONNE,
+    "deliveries/profile": {
+        "agency": _NAME,
+        "company": _NAME,
+        "contact": _PERSON,
         "contract": (("typeOf", "startDate", "endDate"), ()),
         "delivery": (("title",), ()),
-        "document": _NOM,
+        "document": _NAME,
         "opportunity": (("title",), ()),
         "project": (("reference",), ("company",)),
         "purchase": (("title",), ()),
-        "resource": _PERSONNE,
+        "resource": _PERSON,
     },
     "administrative": {
-        "agency": _NOM,
-        "candidate": _PERSONNE,
-        "contract": _CONTRAT,
+        "agency": _NAME,
+        "candidate": _PERSON,
+        "contract": _CONTRACT,
     },
-    # `GET /companies/{id}/information` — TYPES observés en réel le 2026-09-13
-    # (`agency`, `company`, `resource`) ; les attributs réduits de chaque type
-    # ne l'ont PAS été : on reprend les formes minimales des autres modules.
+    # `GET /companies/{id}/information` — TYPES observed for real on
+    # 2026-09-13 (`agency`, `company`, `resource`); each type's reduced
+    # attributes have NOT been — the minimal shapes from the other modules are
+    # reused.
     "companies/information": {
-        "agency": _NOM,
-        "company": _NOM,
-        "resource": _PERSONNE,
+        "agency": _NAME,
+        "company": _NAME,
+        "resource": _PERSON,
     },
 }
 
-#: Repli pour les modules sans table dédiée (détails des modules secondaires).
-FORMES_DEFAUT: dict[str, Forme] = {
-    "resource": _PERSONNE,
-    "agency": _NOM,
-    "pole": _NOM,
-    "businessunit": _NOM,
-    "company": _NOM,
-    "contact": _PERSONNE,
-    "candidate": _PERSONNE,
+#: Fallback for modules without a dedicated table (secondary modules' details).
+DEFAULT_SHAPES: dict[str, Shape] = {
+    "resource": _PERSON,
+    "agency": _NAME,
+    "pole": _NAME,
+    "businessunit": _NAME,
+    "company": _NAME,
+    "contact": _PERSON,
+    "candidate": _PERSON,
     "action": _ACTION,
     "opportunity": (("title",), ()),
     "project": (("reference", "typeOf", "mode"), ("company",)),
@@ -290,28 +290,28 @@ FORMES_DEFAUT: dict[str, Forme] = {
     "purchase": (("title", "subscription", "typeOf", "reference"), ("project", "company")),
     "delivery": (("title",), ("dependsOn",)),
     "timesreport": (("term", "state"), ("agency", "resource")),
-    "contract": _CONTRAT,
+    "contract": _CONTRACT,
     "bankingaccount": (("name", "title"), ("connection",)),
     "bankingconnection": (("bankName",), ()),
 }
 
 
 def _index(dataset: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
-    """(type, id) → entité, sur toutes les collections du dataset."""
+    """(type, id) → entity, across every collection in the dataset."""
     index: dict[tuple[str, str], dict[str, Any]] = {}
-    for cle in TYPE_VERS_CLE.values():
-        elements = dataset.get(cle)
+    for key in TYPE_TO_KEY.values():
+        elements = dataset.get(key)
         if isinstance(elements, list):
             for element in elements:
                 index[(element["type"], element["id"])] = element
     return index
 
 
-def _refs_de(item: dict[str, Any], gardees: tuple[str, ...] | None = None) -> list[dict[str, Any]]:
-    """Les références {id, type} des relations d'un item (to-one et to-many)."""
+def _refs_of(item: dict[str, Any], kept: tuple[str, ...] | None = None) -> list[dict[str, Any]]:
+    """The {id, type} references of an item's relationships (to-one and to-many)."""
     refs: list[dict[str, Any]] = []
-    for nom, relation in (item.get("relationships") or {}).items():
-        if gardees is not None and nom not in gardees:
+    for name, relation in (item.get("relationships") or {}).items():
+        if kept is not None and name not in kept:
             continue
         data = relation.get("data")
         for ref in data if isinstance(data, list) else ([data] if data else []):
@@ -319,9 +319,9 @@ def _refs_de(item: dict[str, Any], gardees: tuple[str, ...] | None = None) -> li
     return refs
 
 
-#: Attributs qui n'existent QUE dans les formes réduites (les items de base ne
-#: les portent pas) — valeurs plausibles, clés observées en réel.
-VALEURS_ABSENTES: dict[tuple[str, str], Any] = {
+#: Attributes that only exist in the reduced shapes (base items do not carry
+#: them) — plausible values, keys observed for real.
+MISSING_VALUES: dict[tuple[str, str], Any] = {
     ("agency", "invoicesLockingStates"): [],
     ("company", "canReadCompany"): True,
     ("contact", "canReadContact"): True,
@@ -329,67 +329,67 @@ VALEURS_ABSENTES: dict[tuple[str, str], Any] = {
 }
 
 
-def _reduire(entite: dict[str, Any], forme: Forme) -> dict[str, Any]:
-    """Projette une entité sur sa forme réduite `included`."""
-    attrs_gardes, rels_gardees = forme
-    attributs = entite.get("attributes", {})
-    projetes: dict[str, Any] = {}
-    for attr in attrs_gardes:
-        if attr in attributs:
-            projetes[attr] = attributs[attr]
-        elif (entite["type"], attr) in VALEURS_ABSENTES:
-            projetes[attr] = VALEURS_ABSENTES[(entite["type"], attr)]
-    reduit: dict[str, Any] = {
-        "id": entite["id"],
-        "type": entite["type"],
-        "attributes": projetes,
+def _reduce(entity: dict[str, Any], shape: Shape) -> dict[str, Any]:
+    """Projects an entity onto its `included` reduced shape."""
+    kept_attrs, kept_rels = shape
+    attributes = entity.get("attributes", {})
+    projected: dict[str, Any] = {}
+    for attr in kept_attrs:
+        if attr in attributes:
+            projected[attr] = attributes[attr]
+        elif (entity["type"], attr) in MISSING_VALUES:
+            projected[attr] = MISSING_VALUES[(entity["type"], attr)]
+    reduced: dict[str, Any] = {
+        "id": entity["id"],
+        "type": entity["type"],
+        "attributes": projected,
     }
-    if rels_gardees:
+    if kept_rels:
         relations = {
-            nom: rel
-            for nom, rel in (entite.get("relationships") or {}).items()
-            if nom in rels_gardees
+            name: rel
+            for name, rel in (entity.get("relationships") or {}).items()
+            if name in kept_rels
         }
         if relations:
-            reduit["relationships"] = relations
-    return reduit
+            reduced["relationships"] = relations
+    return reduced
 
 
-def construire_included(
+def build_included(
     items: list[dict[str, Any]],
     dataset: dict[str, Any],
     module: str | None = None,
     index: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Le tableau `included` d'une page (ou d'un détail), selon la table du module.
+    """The `included` array of a page (or a detail), per the module's table.
 
-    Liste blanche stricte : un type absent de la table du module n'entre pas
-    dans `included` — c'est le comportement des schémas officiels. Clôture
-    transitive sur les relations gardées, tri stable par (type, id).
+    Strict whitelist: a type absent from the module's table does not enter
+    `included` — that is the official schemas' behavior. Transitive closure
+    over kept relationships, stable sort by (type, id).
     """
-    formes = FORMES_PAR_MODULE.get(module or "", FORMES_DEFAUT)
+    shapes = SHAPES_BY_MODULE.get(module or "", DEFAULT_SHAPES)
     if index is None:
         index = _index(dataset)
-    inclus: dict[tuple[str, str], dict[str, Any]] = {}
-    a_traiter = [ref for item in items for ref in _refs_de(item)]
+    included: dict[tuple[str, str], dict[str, Any]] = {}
+    to_process = [ref for item in items for ref in _refs_of(item)]
 
-    while a_traiter:
-        ref = a_traiter.pop()
-        cle = (ref["type"], ref["id"])
-        if cle in inclus or ref["type"] not in formes:
+    while to_process:
+        ref = to_process.pop()
+        key = (ref["type"], ref["id"])
+        if key in included or ref["type"] not in shapes:
             continue
-        entite = index.get(cle)
-        if entite is None:
+        entity = index.get(key)
+        if entity is None:
             continue
-        forme = formes[ref["type"]]
-        inclus[cle] = _reduire(entite, forme)
-        if forme[1]:
-            a_traiter.extend(_refs_de(entite, forme[1]))
+        shape = shapes[ref["type"]]
+        included[key] = _reduce(entity, shape)
+        if shape[1]:
+            to_process.extend(_refs_of(entity, shape[1]))
 
-    def _cle_tri(entite: dict[str, Any]) -> tuple[str, int, str]:
+    def _sort_key(entity: dict[str, Any]) -> tuple[str, int, str]:
         try:
-            return (entite["type"], int(entite["id"]), "")
+            return (entity["type"], int(entity["id"]), "")
         except ValueError:
-            return (entite["type"], 0, entite["id"])
+            return (entity["type"], 0, entity["id"])
 
-    return sorted(inclus.values(), key=_cle_tri)
+    return sorted(included.values(), key=_sort_key)

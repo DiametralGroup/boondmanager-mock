@@ -1,31 +1,30 @@
-"""Évolution temporelle du jeu de données — pour éprouver l'extraction incrémentale.
+"""Time evolution of the dataset — to exercise incremental extraction.
 
-Un extracteur incrémental ne se teste pas contre un jeu de données figé : il
-faut que des enregistrements CHANGENT entre deux exécutions, sinon le curseur
-(`period=updated`, `sort=updateDate`, `updatedSince`) passe tous les tests sans
-avoir rien filtré. Ce module fait vivre l'ESN entre deux requêtes :
+An incremental extractor cannot be tested against a frozen dataset: records
+must CHANGE between two runs, otherwise the cursor (`period=updated`,
+`sort=updateDate`, `updatedSince`) passes every test without having filtered
+anything. This module makes the firm live between two requests:
 
-  cadence     un événement toutes les `BOOND_MOCK_EVOLUTION_INTERVAL` secondes
-              (60 par défaut ; 0 ou BOOND_MOCK_EVOLUTION=false pour figer) ;
-  événements  nouvelles actions CRM, mise à jour de profils, STAFFING et
-              DÉSTAFFING de consultants (mission créée ou terminée, `icStatus`
-              basculé), factures réglées (+ la transaction bancaire qui
-              arrive), opportunités qui avancent, CRA validés, nouveaux
-              contacts ;
-  horloge     `engine.now()` — donc `POST /__admin/clock {advance_seconds}`
-              fait défiler la vie de l'entreprise sans attendre, exactement
-              comme pour les fenêtres de limite de débit.
+  cadence     one event every `BOOND_MOCK_EVOLUTION_INTERVAL` seconds
+              (60 by default; 0 or BOOND_MOCK_EVOLUTION=false to freeze it);
+  events      new CRM actions, profile updates, consultant STAFFING and
+              DESTAFFING (delivery created or ended, `icStatus` flipped),
+              invoices settled (+ the matching banking transaction),
+              opportunities progressing, timesheets validated, new contacts;
+  clock       `engine.now()` — so `POST /__admin/clock {advance_seconds}`
+              fast-forwards the company's life without waiting, exactly like
+              for rate-limit windows.
 
-DÉTERMINISME : la SÉQUENCE d'événements ne dépend que de la graine — l'événement
-k tire son aléa de `Random(f"{seed}:{k}")` et son horodatage vaut toujours
-ÉPOQUE + (k+1) x intervalle. Deux serveurs démarrés avec la même graine servent
-donc les mêmes données au même âge. Ce qui dépend du temps réel, c'est combien
-d'événements sont déjà appliqués — c'est le but : deux extractions successives
-voient un delta, et `meta.totals.rows` bouge comme chez le fournisseur.
+DETERMINISM: the event SEQUENCE depends only on the seed — event k draws its
+randomness from `Random(f"{seed}:{k}")` and its timestamp is always EPOCH +
+(k+1) x interval. Two servers started with the same seed therefore serve the
+same data at the same age. What depends on real time is how many events have
+already been applied — that is the point: two successive extractions see a
+delta, and `meta.totals.rows` moves just like at the vendor.
 
-Chaque événement pousse `updateDate` des enregistrements touchés à son
-horodatage (postérieur au plafond du jeu de base) : un curseur incrémental posé
-après la construction ne revoit QUE ce qui a bougé.
+Each event bumps the affected records' `updateDate` to its own timestamp
+(later than the base dataset's cap): an incremental cursor placed after
+construction sees ONLY what has changed.
 """
 
 from __future__ import annotations
@@ -36,183 +35,183 @@ import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .dataset.realiste import (
-    ETAT_RESSOURCE_ACTIVE,
-    ETAT_RESSOURCE_INTEGRATION,
-    ETAT_RESSOURCE_INTERCONTRAT,
-    ETAT_RESSOURCE_PREAVIS,
+from .dataset.realistic import (
+    RESOURCE_STATE_ACTIVE,
+    RESOURCE_STATE_BENCH,
+    RESOURCE_STATE_NOTICE_PERIOD,
+    RESOURCE_STATE_ONBOARDING,
 )
 from .settings import settings
 
-#: L'époque des événements : l'ancre du jeu de données, 9 h heure de Paris.
-#: Tous les horodatages d'évolution sont STRICTEMENT postérieurs au plafond
-#: des `updateDate` du jeu de base (2026-07-12) — c'est ce qui rend le delta
-#: incrémental propre.
-EPOQUE = datetime(2026, 7, 15, 9, 0, 0, tzinfo=timezone(timedelta(hours=2)))
+#: The events' epoch: the dataset's anchor, 9 AM Paris time. Every evolution
+#: timestamp is STRICTLY later than the base dataset's `updateDate` cap
+#: (2026-07-12) — that is what keeps the incremental delta clean.
+EPOCH = datetime(2026, 7, 15, 9, 0, 0, tzinfo=timezone(timedelta(hours=2)))
 
-#: Le cycle des événements. `staffing` alterne de lui-même entre « staffé » et
-#: « déstaffé » selon l'état du banc au moment où il se déclenche.
+#: The event cycle. `staffing` alternates on its own between "staffed" and
+#: "destaffed" depending on the bench's state when it fires.
 CYCLE = (
     "action",
-    "profil",
+    "profile",
     "staffing",
-    "facture",
+    "invoice",
     "action",
-    "opportunite",
-    "cra",
+    "opportunity",
+    "timesreport",
     "contact",
 )
 
-_TEXTES_ACTION = (
-    "Appel de suivi — prochaines échéances passées en revue.",
-    "Point hebdomadaire avec le client, plan de charge confirmé.",
-    "Envoi du compte rendu d'atelier et des prochaines étapes.",
-    "Qualification d'un nouveau besoin exprimé par le client.",
-    "Relance sur la proposition en attente de décision.",
+_ACTION_TEXTS = (
+    "Follow-up call — upcoming milestones reviewed.",
+    "Weekly sync with the client, workload plan confirmed.",
+    "Sent workshop minutes and next steps.",
+    "Qualified a new need expressed by the client.",
+    "Followed up on the proposal awaiting a decision.",
 )
 
-_COMPETENCES_EVOLUTION = ("DuckDB", "Rust", "LangChain", "OpenTelemetry", "Iceberg", "Dagster")
+_EVOLUTION_SKILLS = ("DuckDB", "Rust", "LangChain", "OpenTelemetry", "Iceberg", "Dagster")
 
-_PRENOMS_CONTACT = ("Margaux", "Étienne", "Salomé", "Corentin", "Awa", "Baptiste")
-_NOMS_CONTACT = ("Vasseur", "Lefevre", "Nguyen", "Da Silva", "Kaddour", "Petit")
-
-
-def _ts(secondes: float) -> str:
-    return (EPOQUE + timedelta(seconds=secondes)).strftime("%Y-%m-%dT%H:%M:%S%z")
+_CONTACT_FIRST_NAMES = ("Margaux", "Étienne", "Salomé", "Corentin", "Awa", "Baptiste")
+_CONTACT_LAST_NAMES = ("Vasseur", "Lefevre", "Nguyen", "Da Silva", "Kaddour", "Petit")
 
 
-def _jour(secondes: float) -> str:
-    return (EPOQUE + timedelta(seconds=secondes)).strftime("%Y-%m-%d")
+def _ts(seconds: float) -> str:
+    return (EPOCH + timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
-def _prochain_id(items: list[dict[str, Any]]) -> str:
+def _day(seconds: float) -> str:
+    return (EPOCH + timedelta(seconds=seconds)).strftime("%Y-%m-%d")
+
+
+def _next_id(items: list[dict[str, Any]]) -> str:
     return str(max((int(i["id"]) for i in items), default=0) + 1)
 
 
-#: Les etats du cote IN de la nomenclature d'instance, hors conge longue duree.
-#: ⚠️ CE N'EST PAS UNE OPTIMISATION, C'EST UNE CONSEQUENCE. Tant que le jeu ne
-#: rendait que trois etats, « actif » se confondait avec `state == 1` et le banc
-#: d'intercontrat s'y trouvait forcement. Depuis que l'intercontrat a SON etat
-#: (3, UN/IC - UNASIGNED), un filtre sur 1 seul VIDE le banc : les quatre
-#: consultants disponibles n'y sont plus, `_staffing` bascule en destaffing, et
-#: aucune mission n'est creee. C'est exactement ce qu'a montre
-#: test_staffing_puis_destaffing_visibles_sur_le_profil.
+#: The IN side of the instance nomenclature, excluding long-term leave.
+#: ⚠️ THIS IS NOT AN OPTIMIZATION, IT IS A CONSEQUENCE. As long as the dataset
+#: only rendered three states, "active" was conflated with `state == 1` and
+#: the intercontract bench necessarily fell into it. Now that the bench has
+#: ITS OWN state (3, UN/IC - UNASIGNED), filtering on 1 alone EMPTIES the
+#: bench: the four available consultants are no longer in it, `_staffing`
+#: falls back to destaffing, and no delivery gets created. That is exactly
+#: what test_staffing_puis_destaffing_visibles_sur_le_profil showed.
 #:
-#: 4 (LONG TERM LEAVE) est exclu a dessein : la personne compte dans l'effectif
-#: mais ne se staffe pas. 0 (OFF) est sorti. 5 (LEAVING COMPANY) reste staffable
-#: — un preavis travaille jusqu'a son terme.
-ETATS_STAFFABLES = (
-    ETAT_RESSOURCE_ACTIVE,
-    ETAT_RESSOURCE_INTEGRATION,
-    ETAT_RESSOURCE_INTERCONTRAT,
-    ETAT_RESSOURCE_PREAVIS,
+#: 4 (LONG TERM LEAVE) is deliberately excluded: the person counts in
+#: headcount but is not staffable. 0 (OFF) is departed. 5 (LEAVING COMPANY)
+#: stays staffable — someone on notice works until their term ends.
+STAFFABLE_STATES = (
+    RESOURCE_STATE_ACTIVE,
+    RESOURCE_STATE_ONBOARDING,
+    RESOURCE_STATE_BENCH,
+    RESOURCE_STATE_NOTICE_PERIOD,
 )
 
 
-def _actifs(dataset: dict[str, Any]) -> list[dict[str, Any]]:
-    """Les consultants presents et staffables (ni direction, ni managers, ni sortis)."""
+def _active(dataset: dict[str, Any]) -> list[dict[str, Any]]:
+    """Present, staffable consultants (neither leadership, nor managers, nor departed)."""
     return [
         r
         for r in dataset["resources"]
-        if int(r["id"]) >= 7 and r["attributes"].get("state") in ETATS_STAFFABLES
+        if int(r["id"]) >= 7 and r["attributes"].get("state") in STAFFABLE_STATES
     ]
 
 
-def _au_banc(dataset: dict[str, Any]) -> list[dict[str, Any]]:
-    """Le banc d'intercontrat — `availability: "immediate"`, champ OBSERVÉ en
-    réel (les icStatus/icSince du RAML ne sont jamais renvoyés)."""
-    return [r for r in _actifs(dataset) if r["attributes"].get("availability") == "immediate"]
+def _on_bench(dataset: dict[str, Any]) -> list[dict[str, Any]]:
+    """The intercontract bench — `availability: "immediate"`, a field OBSERVED
+    for real (the RAML's icStatus/icSince are never returned)."""
+    return [r for r in _active(dataset) if r["attributes"].get("availability") == "immediate"]
 
 
-#: L'etat « WON » de la nomenclature de l'instance. Le mock a longtemps code 4,
-#: ce qui n'existe nulle part : deux sources independantes — le process
-#: Confluence et l'export metier — donnent 7 (cf. patch 0.5.1).
-ETAT_OPPORTUNITE_GAGNEE = 7
+#: The instance nomenclature's "WON" state. The mock used to code 4, which
+#: exists nowhere: two independent sources — the Confluence process and the
+#: business export — give 7 (see patch 0.5.1).
+OPPORTUNITY_STATE_WON = 7
 
-#: Comment une affaire avance. Explicite plutot qu'arithmetique : la
-#: nomenclature saute de 3 a 7, et tout calcul sur l'entier le manque.
-TRANSITION_OPPORTUNITE = {
+#: How a deal moves forward. Explicit rather than arithmetic: the nomenclature
+#: jumps from 3 to 7, and any integer arithmetic on it misses that.
+OPPORTUNITY_TRANSITION = {
     1: 2,  # Open                      -> Qualified (working on solution)
     2: 3,  # Qualified                 -> Proposed solution
-    3: ETAT_OPPORTUNITE_GAGNEE,  # Proposed solution -> WON
+    3: OPPORTUNITY_STATE_WON,  # Proposed solution -> WON
 }
 
 
 class Evolution:
-    """La chronologie d'événements d'une instance, réarmée à chaque reset."""
+    """An instance's event timeline, rearmed on every reset."""
 
-    def __init__(self, seed: int, demarrage: float) -> None:
+    def __init__(self, seed: int, started_at: float) -> None:
         self.seed = seed
-        self.demarrage = demarrage
-        self.appliques = 0
+        self.started_at = started_at
+        self.applied = 0
         self.journal: list[dict[str, Any]] = []
-        self._verrou = threading.Lock()
+        self._lock = threading.Lock()
 
-    # ── Pilotage ─────────────────────────────────────────────────────────────
+    # ── Control ──────────────────────────────────────────────────────────────
 
-    def avancer(self, dataset: dict[str, Any], maintenant: float) -> int:
-        """Applique tous les événements devenus dus ; rend leur NOMBRE (pour
-        l'invalidation des caches). Idempotent et verrouillé — les handlers
-        FastAPI tournent dans un pool de threads."""
+    def advance(self, dataset: dict[str, Any], now: float) -> int:
+        """Applies every event that has become due; returns their COUNT (for
+        cache invalidation). Idempotent and locked — FastAPI handlers run in a
+        thread pool."""
         if not settings.evolution_enabled or settings.evolution_interval <= 0:
             return 0
-        dus = int((maintenant - self.demarrage) // settings.evolution_interval)
-        if dus <= self.appliques:
+        due = int((now - self.started_at) // settings.evolution_interval)
+        if due <= self.applied:
             return 0
-        appliques_ici = 0
-        with self._verrou:
-            while self.appliques < dus:
-                k = self.appliques
+        applied_here = 0
+        with self._lock:
+            while self.applied < due:
+                k = self.applied
                 age = (k + 1) * settings.evolution_interval
-                detail = self._appliquer(dataset, k, age)
+                detail = self._apply(dataset, k, age)
                 self.journal.append(
                     {"index": k, "at": _ts(age), "kind": CYCLE[k % len(CYCLE)], "detail": detail}
                 )
                 del self.journal[:-50]
-                self.appliques += 1
-                appliques_ici += 1
-        return appliques_ici
+                self.applied += 1
+                applied_here += 1
+        return applied_here
 
-    def apercu(self) -> dict[str, Any]:
-        """Ce que /__admin/state expose — l'observabilité du delta."""
+    def overview(self) -> dict[str, Any]:
+        """What /__admin/state exposes — the delta's observability."""
         return {
             "enabled": settings.evolution_enabled and settings.evolution_interval > 0,
             "interval_seconds": settings.evolution_interval,
-            "applied": self.appliques,
+            "applied": self.applied,
             "journal": self.journal[-20:],
         }
 
-    # ── Les événements ───────────────────────────────────────────────────────
+    # ── The events ───────────────────────────────────────────────────────────
 
-    def _appliquer(self, dataset: dict[str, Any], k: int, age: float) -> str:
+    def _apply(self, dataset: dict[str, Any], k: int, age: float) -> str:
         rng = random.Random(f"{self.seed}:{k}")
-        genre = CYCLE[k % len(CYCLE)]
-        gestionnaires = {
+        kind = CYCLE[k % len(CYCLE)]
+        handlers = {
             "action": self._action,
-            "profil": self._profil,
+            "profile": self._profile,
             "staffing": self._staffing,
-            "facture": self._facture,
-            "opportunite": self._opportunite,
-            "cra": self._cra,
+            "invoice": self._invoice,
+            "opportunity": self._opportunity,
+            "timesreport": self._timesreport,
             "contact": self._contact,
         }
-        detail = gestionnaires[genre](dataset, rng, k, age)
-        # Un gestionnaire sans matière (plus de facture à régler, plus de CRA à
-        # valider…) retombe sur l'événement le plus neutre : une action CRM.
+        detail = handlers[kind](dataset, rng, k, age)
+        # A handler with nothing to do (no more invoice to settle, no more
+        # timesheet to validate…) falls back to the most neutral event: a CRM
+        # action.
         return detail or self._action(dataset, rng, k, age)
 
-    def _nouvelle_action(
+    def _new_action(
         self,
         dataset: dict[str, Any],
         rng: random.Random,
         age: float,
         *,
-        cible_type: str,
-        cible_id: str,
-        texte: str,
-        societe_id: str | None,
+        target_type: str,
+        target_id: str,
+        text: str,
+        company_id: str | None,
     ) -> str:
-        ident = _prochain_id(dataset["actions"])
+        ident = _next_id(dataset["actions"])
         dataset["actions"].append(
             {
                 "id": ident,
@@ -221,7 +220,7 @@ class Evolution:
                     "startDate": _ts(age),
                     "creationDate": _ts(age),
                     "typeOf": rng.choice([1, 2, 3, 5]),
-                    "text": texte,
+                    "text": text,
                     "numberOfFiles": 0,
                     "canReadAction": True,
                     "canWriteAction": True,
@@ -229,183 +228,187 @@ class Evolution:
                 },
                 "relationships": {
                     "mainManager": {"data": {"id": str(rng.choice((2, 3, 5))), "type": "resource"}},
-                    "dependsOn": {"data": {"id": cible_id, "type": cible_type}},
+                    "dependsOn": {"data": {"id": target_id, "type": target_type}},
                     "company": {
-                        "data": {"id": societe_id, "type": "company"} if societe_id else None
+                        "data": {"id": company_id, "type": "company"} if company_id else None
                     },
                     "relatedActions": {"data": []},
                 },
             }
         )
-        return f"action {ident} ({cible_type} {cible_id})"
+        return f"action {ident} ({target_type} {target_id})"
 
     def _action(self, dataset: dict[str, Any], rng: random.Random, k: int, age: float) -> str:
         contacts = dataset["contacts"]
         if not contacts:
-            return "aucune cible"
+            return "no target"
         contact = contacts[k % len(contacts)]
-        return self._nouvelle_action(
+        return self._new_action(
             dataset,
             rng,
             age,
-            cible_type="contact",
-            cible_id=contact["id"],
-            texte=rng.choice(_TEXTES_ACTION),
-            societe_id=contact["relationships"]["company"]["data"]["id"],
+            target_type="contact",
+            target_id=contact["id"],
+            text=rng.choice(_ACTION_TEXTS),
+            company_id=contact["relationships"]["company"]["data"]["id"],
         )
 
-    def _profil(self, dataset: dict[str, Any], rng: random.Random, k: int, age: float) -> str:
-        actifs = _actifs(dataset)
-        if not actifs:
+    def _profile(self, dataset: dict[str, Any], rng: random.Random, k: int, age: float) -> str:
+        active = _active(dataset)
+        if not active:
             return ""
-        res = actifs[k % len(actifs)]
+        res = active[k % len(active)]
         attrs = res["attributes"]
-        nouvelle = rng.choice(_COMPETENCES_EVOLUTION)
-        if nouvelle not in attrs.get("skills", ""):
-            attrs["skills"] = f"{attrs['skills']}, {nouvelle}" if attrs.get("skills") else nouvelle
+        new_skill = rng.choice(_EVOLUTION_SKILLS)
+        if new_skill not in attrs.get("skills", ""):
+            attrs["skills"] = (
+                f"{attrs['skills']}, {new_skill}" if attrs.get("skills") else new_skill
+            )
             attrs["tools"] = [
                 *attrs.get("tools", []),
-                {"tool": nouvelle, "level": rng.randint(2, 4)},
+                {"tool": new_skill, "level": rng.randint(2, 4)},
             ]
         attrs["numberOfResumes"] = (attrs.get("numberOfResumes") or 0) + 1
         attrs["updateDate"] = _ts(age)
-        return f"profil ressource {res['id']} ({nouvelle})"
+        return f"resource profile {res['id']} ({new_skill})"
 
     def _staffing(self, dataset: dict[str, Any], rng: random.Random, _k: int, age: float) -> str:
-        """Le cœur du réalisme incrémental : le banc bouge dans les deux sens."""
-        jour = _jour(age)
-        banc = _au_banc(dataset)
-        if banc:
-            return self._staffer(dataset, rng, banc[0], jour, age)
-        return self._destaffer(dataset, rng, jour, age)
+        """The core of incremental realism: the bench moves both ways."""
+        day = _day(age)
+        bench = _on_bench(dataset)
+        if bench:
+            return self._staff(dataset, rng, bench[0], day, age)
+        return self._destaff(dataset, rng, day, age)
 
-    def _staffer(
+    def _staff(
         self,
         dataset: dict[str, Any],
         rng: random.Random,
         res: dict[str, Any],
-        jour: str,
+        day: str,
         age: float,
     ) -> str:
-        en_cours = [
+        ongoing = [
             p
             for p in dataset["projects"]
-            if p["attributes"]["startDate"] <= jour <= p["attributes"]["endDate"]
+            if p["attributes"]["startDate"] <= day <= p["attributes"]["endDate"]
         ]
-        if not en_cours:
+        if not ongoing:
             return ""
-        projet = rng.choice(en_cours)
-        modele = next(
+        project = rng.choice(ongoing)
+        template = next(
             (
                 m
                 for m in dataset["deliveries"]
-                if m["relationships"]["project"]["data"]["id"] == projet["id"]
+                if m["relationships"]["project"]["data"]["id"] == project["id"]
             ),
             dataset["deliveries"][0],
         )
-        mission = copy.deepcopy(modele)
-        mission["id"] = _prochain_id(dataset["deliveries"])
-        tjm = res["attributes"].get("averageDailyPriceExcludingTax") or 650.0
-        fin = projet["attributes"]["endDate"]
-        jours_prevus = 40.0
-        attrs = mission["attributes"]
+        delivery = copy.deepcopy(template)
+        delivery["id"] = _next_id(dataset["deliveries"])
+        daily_rate = res["attributes"].get("averageDailyPriceExcludingTax") or 650.0
+        end = project["attributes"]["endDate"]
+        planned_days = 40.0
+        attrs = delivery["attributes"]
         attrs.update(
             {
-                "startDate": jour,
-                "endDate": fin,
+                "startDate": day,
+                "endDate": end,
                 "title": res["attributes"]["title"],
                 "state": 1,
-                "averageDailyPriceExcludingTax": tjm,
-                "averageDailyCost": round(tjm * 0.58, 2),
-                "averageDailyContractCost": round(tjm * 0.58, 2),
-                "numberOfDaysInvoicedOrQuantity": jours_prevus,
-                "turnoverSimulatedExcludingTax": round(tjm * jours_prevus, 2),
-                "costsSimulatedExcludingTax": round(tjm * 0.58 * jours_prevus, 2),
-                "marginSimulatedExcludingTax": round(tjm * 0.42 * jours_prevus, 2),
+                "averageDailyPriceExcludingTax": daily_rate,
+                "averageDailyCost": round(daily_rate * 0.58, 2),
+                "averageDailyContractCost": round(daily_rate * 0.58, 2),
+                "numberOfDaysInvoicedOrQuantity": planned_days,
+                "turnoverSimulatedExcludingTax": round(daily_rate * planned_days, 2),
+                "costsSimulatedExcludingTax": round(daily_rate * 0.58 * planned_days, 2),
+                "marginSimulatedExcludingTax": round(daily_rate * 0.42 * planned_days, 2),
                 "creationDate": _ts(age),
                 "updateDate": _ts(age),
             }
         )
-        mission["relationships"] = {
-            "project": {"data": {"id": projet["id"], "type": "project"}},
+        delivery["relationships"] = {
+            "project": {"data": {"id": project["id"], "type": "project"}},
             "dependsOn": {"data": {"id": res["id"], "type": "resource"}},
             "purchase": {"data": None},
         }
-        dataset["deliveries"].append(mission)
+        dataset["deliveries"].append(delivery)
 
         res["attributes"].update(
             {
-                "availability": fin,
+                "availability": end,
                 "realAvailability": "",
                 "numberOfActivePositionings": 0,
                 "updateDate": _ts(age),
             }
         )
-        self._nouvelle_action(
+        self._new_action(
             dataset,
             rng,
             age,
-            cible_type="resource",
-            cible_id=res["id"],
-            texte=f"Positionnement confirmé — démarrage sur {projet['attributes']['reference']}.",
-            societe_id=projet["relationships"]["company"]["data"]["id"],
+            target_type="resource",
+            target_id=res["id"],
+            text=f"Staffing confirmed — starting on {project['attributes']['reference']}.",
+            company_id=project["relationships"]["company"]["data"]["id"],
         )
-        return f"ressource {res['id']} staffée sur projet {projet['id']} (mission {mission['id']})"
+        return (
+            f"resource {res['id']} staffed on project {project['id']} (delivery {delivery['id']})"
+        )
 
-    def _destaffer(self, dataset: dict[str, Any], rng: random.Random, jour: str, age: float) -> str:
+    def _destaff(self, dataset: dict[str, Any], rng: random.Random, day: str, age: float) -> str:
         candidates = [
             m
             for m in dataset["deliveries"]
             if m["attributes"]["state"] == 1
-            and m["attributes"]["endDate"] > jour
+            and m["attributes"]["endDate"] > day
             and m["relationships"]["dependsOn"]["data"] is not None
             and m["relationships"]["dependsOn"]["data"]["type"] == "resource"
         ]
         if not candidates:
             return ""
-        mission = rng.choice(candidates)
-        res_id = mission["relationships"]["dependsOn"]["data"]["id"]
+        delivery = rng.choice(candidates)
+        res_id = delivery["relationships"]["dependsOn"]["data"]["id"]
         res = next(r for r in dataset["resources"] if r["id"] == res_id)
-        mission["attributes"].update({"endDate": jour, "state": 2, "updateDate": _ts(age)})
+        delivery["attributes"].update({"endDate": day, "state": 2, "updateDate": _ts(age)})
         res["attributes"].update(
             {
                 "availability": "immediate",
-                "realAvailability": jour,
+                "realAvailability": day,
                 "numberOfActivePositionings": rng.randint(1, 2),
                 "updateDate": _ts(age),
             }
         )
-        self._nouvelle_action(
+        self._new_action(
             dataset,
             rng,
             age,
-            cible_type="resource",
-            cible_id=res["id"],
-            texte="Fin de mission anticipée — retour en intercontrat, recherche de positionnement.",
-            societe_id=None,
+            target_type="resource",
+            target_id=res["id"],
+            text="Delivery ended early — back on the bench, looking for staffing.",
+            company_id=None,
         )
-        return f"ressource {res_id} déstaffée (mission {mission['id']} close)"
+        return f"resource {res_id} destaffed (delivery {delivery['id']} closed)"
 
-    def _facture(self, dataset: dict[str, Any], _rng: random.Random, _k: int, age: float) -> str:
-        en_attente = [
+    def _invoice(self, dataset: dict[str, Any], _rng: random.Random, _k: int, age: float) -> str:
+        pending = [
             f
             for f in dataset["invoices"]
             if f["attributes"]["state"] == 1 and not f["attributes"]["isCreditNote"]
         ]
-        if not en_attente:
+        if not pending:
             return ""
-        facture = en_attente[0]
-        attrs = facture["attributes"]
+        invoice = pending[0]
+        attrs = invoice["attributes"]
         attrs.update(
             {
                 "state": 2,
                 "sendingState": 2,
                 "closed": True,
-                "performedPaymentDate": _jour(age),
+                "performedPaymentDate": _day(age),
                 "updateDate": _ts(age),
             }
         )
-        ident = _prochain_id(dataset["banking_transactions"])
+        ident = _next_id(dataset["banking_transactions"])
         dataset["banking_transactions"].append(
             {
                 "id": ident,
@@ -425,52 +428,55 @@ class Evolution:
                 "relationships": {"account": {"data": {"id": "1", "type": "bankingaccount"}}},
             }
         )
-        return f"facture {facture['id']} réglée (transaction {ident})"
+        return f"invoice {invoice['id']} settled (transaction {ident})"
 
-    def _opportunite(self, dataset: dict[str, Any], _rng: random.Random, k: int, age: float) -> str:
-        ouvertes = [o for o in dataset["opportunities"] if o["attributes"]["state"] in (1, 2, 3)]
-        if not ouvertes:
+    def _opportunity(self, dataset: dict[str, Any], _rng: random.Random, k: int, age: float) -> str:
+        open_ones = [o for o in dataset["opportunities"] if o["attributes"]["state"] in (1, 2, 3)]
+        if not open_ones:
             return ""
-        opp = ouvertes[k % len(ouvertes)]
+        opp = open_ones[k % len(open_ones)]
         attrs = opp["attributes"]
-        # LA NOMENCLATURE N'EST PAS CONTIGUE, et `+= 1` le supposait. Apres 3
-        # (Proposed solution) vient 7 (WON) : incrementer produisait un etat 4
-        # que l'instance ne connait pas, que le dictionnaire ne declare pas, et
-        # que fct_opportunite ne range ni en gagne, ni en perdu, ni en cours.
-        # La transition est donc NOMMEE, et elle echoue bruyamment si un etat
-        # inattendu arrive — un KeyError se voit, un compteur faux non.
-        attrs["state"] = TRANSITION_OPPORTUNITE[attrs["state"]]
+        # THE NOMENCLATURE IS NOT CONTIGUOUS, and `+= 1` assumed it was. After
+        # 3 (Proposed solution) comes 7 (WON): incrementing produced a state 4
+        # the instance does not know, that the dictionary does not declare,
+        # and that fct_opportunite sorts into neither won, lost, nor ongoing.
+        # The transition is therefore NAMED, and it fails loudly if an
+        # unexpected state shows up — a KeyError is visible, a wrong count is
+        # not.
+        attrs["state"] = OPPORTUNITY_TRANSITION[attrs["state"]]
         attrs["updateDate"] = _ts(age)
-        if attrs["state"] == ETAT_OPPORTUNITE_GAGNEE:
-            attrs["closingDate"] = _jour(age)
+        if attrs["state"] == OPPORTUNITY_STATE_WON:
+            attrs["closingDate"] = _day(age)
             attrs["turnoverWeightedExcludingTax"] = attrs["turnoverEstimatedExcludingTax"]
-            societe_id = opp["relationships"]["company"]["data"]["id"]
-            societe = next(s for s in dataset["companies"] if s["id"] == societe_id)
-            societe["attributes"]["updateDate"] = _ts(age)
-            return f"opportunité {opp['id']} gagnée"
-        return f"opportunité {opp['id']} avance (état {attrs['state']})"
+            company_id = opp["relationships"]["company"]["data"]["id"]
+            company = next(s for s in dataset["companies"] if s["id"] == company_id)
+            company["attributes"]["updateDate"] = _ts(age)
+            return f"opportunity {opp['id']} won"
+        return f"opportunity {opp['id']} progressing (state {attrs['state']})"
 
-    def _cra(self, dataset: dict[str, Any], _rng: random.Random, _k: int, _age: float) -> str:
-        en_attente = [
+    def _timesreport(
+        self, dataset: dict[str, Any], _rng: random.Random, _k: int, _age: float
+    ) -> str:
+        pending = [
             t
             for t in dataset["times_reports"]
             if t["attributes"]["state"] in ("waitingForValidation", "savedAndNoValidation")
         ]
-        if not en_attente:
+        if not pending:
             return ""
-        cra = en_attente[0]
-        cra["attributes"]["state"] = "validated"
-        return f"CRA {cra['id']} validé ({cra['attributes']['term']})"
+        report = pending[0]
+        report["attributes"]["state"] = "validated"
+        return f"timesheet {report['id']} validated ({report['attributes']['term']})"
 
     def _contact(self, dataset: dict[str, Any], rng: random.Random, k: int, age: float) -> str:
         clients = [s for s in dataset["companies"] if int(s["id"]) <= 10]
         if not clients:
             return ""
-        societe = clients[k % len(clients)]
-        prenom = rng.choice(_PRENOMS_CONTACT)
-        nom = rng.choice(_NOMS_CONTACT)
-        domaine = societe["attributes"]["website"].removeprefix("https://")
-        ident = _prochain_id(dataset["contacts"])
+        company = clients[k % len(clients)]
+        first_name = rng.choice(_CONTACT_FIRST_NAMES)
+        last_name = rng.choice(_CONTACT_LAST_NAMES)
+        domain = company["attributes"]["website"].removeprefix("https://")
+        ident = _next_id(dataset["contacts"])
         dataset["contacts"].append(
             {
                 "id": ident,
@@ -479,18 +485,18 @@ class Evolution:
                     "creationDate": _ts(age),
                     "civility": rng.randint(0, 1),
                     "thumbnail": "",
-                    "firstName": prenom,
-                    "lastName": nom,
+                    "firstName": first_name,
+                    "lastName": last_name,
                     "state": 1,
-                    "function": rng.choice(["Product Manager", "Responsable BI", "Architecte SI"]),
-                    "department": "Direction des systèmes d'information",
-                    "email1": f"{prenom.lower()}.{nom.lower().replace(' ', '')}@{domaine}",
+                    "function": rng.choice(["Product Manager", "BI Lead", "Solutions Architect"]),
+                    "department": "Information Systems Department",
+                    "email1": f"{first_name.lower()}.{last_name.lower().replace(' ', '')}@{domain}",
                     "email2": "",
                     "email3": "",
                     "phone1": "",
                     "phone2": "",
-                    "town": societe["attributes"]["town"],
-                    "country": societe["attributes"]["country"],
+                    "town": company["attributes"]["town"],
+                    "country": company["attributes"]["country"],
                     "canReadContact": True,
                     "canWriteContact": True,
                     "canShowAction": True,
@@ -499,11 +505,11 @@ class Evolution:
                     "updateDate": _ts(age),
                 },
                 "relationships": {
-                    "mainManager": societe["relationships"]["mainManager"],
-                    "company": {"data": {"id": societe["id"], "type": "company"}},
-                    "agency": societe["relationships"]["agency"],
-                    "pole": societe["relationships"]["pole"],
+                    "mainManager": company["relationships"]["mainManager"],
+                    "company": {"data": {"id": company["id"], "type": "company"}},
+                    "agency": company["relationships"]["agency"],
+                    "pole": company["relationships"]["pole"],
                 },
             }
         )
-        return f"contact {ident} créé chez {societe['attributes']['name']}"
+        return f"contact {ident} created at {company['attributes']['name']}"

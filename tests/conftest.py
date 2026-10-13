@@ -1,13 +1,12 @@
-"""Harnais de tests.
+"""Test harness.
 
-Deux réglages d'environnement, posés AVANT l'import du paquet (la
-configuration est lue à l'import) :
+Two environment settings, set BEFORE the package import (configuration is
+read at import time):
 
-  • le plan de contrôle `/__admin` est monté — le montage est conditionnel ;
-  • l'intervalle d'évolution passe à 3600 s : aucun événement ne se déclenche
-    au fil de l'horloge murale pendant la suite, même sur une CI lente. Les
-    tests d'évolution font défiler le temps EXPLICITEMENT via /__admin/clock —
-    c'est ce qui les rend déterministes.
+  • the `/__admin` control plane is mounted — mounting is conditional;
+  • the evolution interval is set to 3600s: no event fires on the wall clock
+    during the suite, even on a slow CI. Evolution tests fast-forward time
+    EXPLICITLY via /__admin/clock — that is what makes them deterministic.
 """
 
 from __future__ import annotations
@@ -32,8 +31,8 @@ ADMIN = {"X-Mock-Admin-Token": "mock-admin-token"}
 
 @pytest.fixture()
 def client():
-    """Un client sur un état REMIS À NEUF — avant ET après, pour qu'un test ne
-    lègue ni règle d'injection ni événement d'évolution au suivant."""
+    """A client on a FRESHLY RESET state — before AND after, so a test leaves
+    neither an injection rule nor an evolution event to the next one."""
     c = TestClient(mock.app)
     mock.state.reset()
     yield c
@@ -41,6 +40,6 @@ def client():
 
 
 @pytest.fixture()
-def boond_state(client):  # noqa: ARG001 — la fixture chaîne le reset
-    """L'état mutable du mock, pour les tests qui inspectent le dataset."""
+def boond_state(client):  # noqa: ARG001 — the fixture chains the reset
+    """The mock's mutable state, for tests that inspect the dataset."""
     return mock.state

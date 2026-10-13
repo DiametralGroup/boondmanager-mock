@@ -1,19 +1,19 @@
-"""Les entités BoondManager — alignées sur la VRAIE API.
+"""BoondManager entities — aligned with the REAL API.
 
-Double provenance : les schémas officiels RAML
-(https://doc.boondmanager.com/api-externe/raml-build/, relevés le 2026-07-30)
-CONFRONTÉS aux réponses réelles d'un tenant en 9.1.78.1 (sondes des
-2026-07-30/31, avec un user token owner). Quand le RAML documente un champ que
-la vraie API ne renvoie jamais (`creationSource` en recherche,
-`numberbOfActiveOpportunity`…), c'est l'OBSERVÉ qui gagne — la matrice des
-écarts vit dans docs/UNVERIFIED-FIELDS.md.
+Dual provenance: the official RAML schemas
+(https://doc.boondmanager.com/api-externe/raml-build/, pulled 2026-07-30)
+CONFRONTED with the real responses of a tenant on 9.1.78.1 (probes from
+2026-07-30/31, with an *owner* user token). When the RAML documents a field
+that the real API never returns (`creationSource` on search,
+`numberbOfActiveOpportunity`…), the OBSERVED wins — the gap matrix lives in
+docs/UNVERIFIED-FIELDS.md.
 
-Les recherches et les profils sont des formes DIFFÉRENTES chez le fournisseur :
-les modèles `Attributs*` décrivent les recherches ; `ProfilRessource` et
-`ProfilProjet` décrivent les détails relevés en réel.
+Searches and profiles are DIFFERENT shapes at the vendor: the `*Attributes`
+models describe searches; `ResourceProfile` and `ProjectProfile` describe the
+details observed for real.
 
-`extra="allow"` partout : ces modèles documentent ce que le mock émet, ils
-n'interdisent rien — un mock strict casserait à chaque évolution du dialecte.
+`extra="allow"` everywhere: these models document what the mock emits, they
+forbid nothing — a strict mock would break on every evolution of the dialect.
 """
 
 from __future__ import annotations
@@ -22,10 +22,10 @@ from typing import Any
 
 from pydantic import Field
 
-from .common import Permissif, RefDonnee, Relation, unverified
+from .common import DataRef, Permissive, Relation, unverified
 
 
-class AttributsBase(Permissif):
+class BaseAttributes(Permissive):
     """The only cross-cutting field added by the mock — and it is ABSENT by default.
 
     ┌─ `isDeleted` IS NOT A VENDOR FIELD, AND NOW THE MOCK SAYS SO ────────────┐
@@ -64,16 +64,16 @@ class AttributsBase(Permissif):
     )
 
 
-class RelationListe(Permissif):
+class RelationList(Permissive):
     """A to-many relationship: `{"data": [{id, type}, …]}`."""
 
-    data: list[RefDonnee] = Field(default_factory=list)
+    data: list[DataRef] = Field(default_factory=list)
 
 
-# ── Sous-objets partagés (formes imbriquées du dialecte) ─────────────────────
+# ── Shared sub-objects (nested shapes of the dialect) ────────────────────────
 
 
-class UniteOeuvre(Permissif):
+class WorkUnit(Permissive):
     """`workUnitType` — the work-unit type of an activity row."""
 
     reference: int
@@ -83,36 +83,36 @@ class UniteOeuvre(Permissif):
     name: str
 
 
-class ReseauSocial(Permissif):
+class SocialNetwork(Permissive):
     network: str = Field(description="facebook | viadeo | linkedin | x")
     url: str
 
 
-class OutilNote(Permissif):
+class RatingTool(Permissive):
     tool: str
     level: int = Field(ge=1, le=5)
 
 
-class LangueParlee(Permissif):
+class SpokenLanguage(Permissive):
     language: str
     level: str
 
 
-class SourceOuOrigine(Permissif):
+class SourceOrOrigin(Permissive):
     """`source` (candidates) and `origin` (opportunities): {typeOf, detail}."""
 
     typeOf: int
     detail: str = ""
 
 
-class RaisonEtat(Permissif):
+class StateReason(Permissive):
     """The opportunities' `stateReason`."""
 
     typeOf: int
     detail: str = ""
 
 
-class ReferenceResumee(Permissif):
+class SummarizedReference(Permissive):
     """A résumé experience, summarized (resources search)."""
 
     id: str
@@ -120,20 +120,20 @@ class ReferenceResumee(Permissif):
     description: str = ""
 
 
-class AgenceImbriquee(Permissif):
+class NestedAgency(Permissive):
     id: str
     name: str
     workUnitRate: float | None = None
 
 
-class RessourceImbriquee(Permissif):
+class NestedResource(Permissive):
     id: str
     lastName: str
     firstName: str
     workUnitRate: float | None = None
 
 
-class RapportAbsences(Permissif):
+class AbsencesReport(Permissive):
     """The absences report EMBEDDED in every /absences row."""
 
     id: str
@@ -141,54 +141,54 @@ class RapportAbsences(Permissif):
     state: str = Field(
         description="savedAndNoValidation | waitingForValidation | validated | rejected"
     )
-    agency: AgenceImbriquee
-    resource: RessourceImbriquee
+    agency: NestedAgency
+    resource: NestedResource
 
 
-class TypeFrais(Permissif):
+class ExpenseType(Permissive):
     reference: int
     taxRate: float | None = None
     name: str
 
 
-class BaremeKilometrique(Permissif):
+class MileageRate(Permissive):
     reference: int
     name: str
     amount: float
 
 
-class RapportFrais(Permissif):
+class ExpensesReport(Permissive):
     """The expenses report EMBEDDED in every /expenses row."""
 
     id: str
     term: str = Field(description="YYYY-MM")
     state: str
-    ratePerKilometerType: BaremeKilometrique | None = None
+    ratePerKilometerType: MileageRate | None = None
     advance: float = 0.0
-    agency: AgenceImbriquee | None = None
-    resource: RessourceImbriquee | None = None
+    agency: NestedAgency | None = None
+    resource: NestedResource | None = None
 
 
-class MissionImbriquee(Permissif):
+class NestedDelivery(Permissive):
     id: str
     title: str = ""
     startDate: str = ""
     endDate: str = ""
 
 
-class ProjetImbrique(Permissif):
+class NestedProject(Permissive):
     id: str
     reference: str = ""
 
 
-class InviteFrais(Permissif):
+class ExpenseGuest(Permissive):
     id: str
     lastName: str
     firstName: str
     thumbnail: str = ""
 
 
-class ReferenceCvCandidat(Permissif):
+class CandidateResumeReference(Permissive):
     """A candidate's detailed experience — months/years as STRINGS, like the API."""
 
     id: str
@@ -206,27 +206,27 @@ class ReferenceCvCandidat(Permissif):
     row: int = 0
 
 
-class NotationCritere(Permissif):
+class RatingCriterion(Permissive):
     criteria: int
     evaluation: str
 
 
-class ManagerImbrique(Permissif):
+class NestedManager(Permissive):
     id: str
     firstName: str
     lastName: str
 
 
-class EvaluationCandidat(Permissif):
+class CandidateEvaluation(Permissive):
     id: str
-    notations: list[NotationCritere] = Field(default_factory=list)
+    notations: list[RatingCriterion] = Field(default_factory=list)
     date: str = ""
     comments: str = ""
-    manager: ManagerImbrique | None = None
+    manager: NestedManager | None = None
 
 
-class DetailFraisContrat(Permissif):
-    """⚠️ SERVI, JAMAIS RENSEIGNÉ — measured 2026-09-10, 0 of 18 contracts.
+class ContractExpenseDetail(Permissive):
+    """⚠️ SERVED, NEVER FILLED — measured 2026-09-10, 0 of 18 contracts.
 
     The key IS emitted on the contract profile; the array is always empty on
     the tenant probed. The mock filled it on 38 of 38 contracts, which made it
@@ -242,12 +242,12 @@ class DetailFraisContrat(Permissif):
     netAmount: float = 0.0
 
 
-class TypeAvantageContrat(Permissif):
+class ContractAdvantageType(Permissive):
     """A contractual benefit entitlement — shape OBSERVED 2026-09-10.
 
     Filled on 16 of 18 probed contracts, 55 lines. The mock used to serve
     `advantageTypes` as an always-empty array, so this shape had never been
-    seen: it is NOT the `DetailFraisContrat` shape it was assumed to share.
+    seen: it is NOT the `ContractExpenseDetail` shape it was assumed to share.
 
     Three traps a consumer must know, all measured:
 
@@ -274,18 +274,18 @@ class TypeAvantageContrat(Permissif):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Ressource (collaborateur)
+#  Resource (employee)
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-class RelationsRessource(Permissif):
+class ResourceRelations(Permissive):
     mainManager: Relation | None = None
     hrManager: Relation | None = None
     agency: Relation | None = None
     pole: Relation | None = None
 
 
-class AttributsRessource(AttributsBase):
+class ResourceAttributes(BaseAttributes):
     creationDate: str | None = None
     civility: int | None = None
     thumbnail: str | None = None
@@ -319,37 +319,37 @@ class AttributsRessource(AttributsBase):
     numberOfResumes: int | None = None
     numberOfActivePositionings: int | None = None
     updateDate: str | None = None
-    tools: list[OutilNote] = Field(default_factory=list)
+    tools: list[RatingTool] = Field(default_factory=list)
     expertiseAreas: list[str] = Field(default_factory=list)
     activityAreas: list[str] = Field(default_factory=list)
     diplomas: list[str] = Field(default_factory=list)
     experience: int | None = None
-    references: list[ReferenceResumee] = Field(default_factory=list)
-    languages: list[LangueParlee] = Field(default_factory=list)
+    references: list[SummarizedReference] = Field(default_factory=list)
+    languages: list[SpokenLanguage] = Field(default_factory=list)
     canShowTechnicalData: bool | None = None
     canShowActions: bool | None = None
-    socialNetworks: list[ReseauSocial] = Field(default_factory=list)
+    socialNetworks: list[SocialNetwork] = Field(default_factory=list)
 
 
-class Ressource(Permissif):
+class Resource(Permissive):
     id: str
     type: str = "resource"
-    attributes: AttributsRessource
-    relationships: RelationsRessource | None = None
+    attributes: ResourceAttributes
+    relationships: ResourceRelations | None = None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Candidat
+#  Candidate
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-class RelationsCandidat(Permissif):
+class CandidateRelations(Permissive):
     mainManager: Relation | None = None
     agency: Relation | None = None
     pole: Relation | None = None
 
 
-class AttributsCandidat(AttributsBase):
+class CandidateAttributes(BaseAttributes):
     creationDate: str | None = None
     updateDate: str | None = None
     civility: int | None = None
@@ -378,36 +378,36 @@ class AttributsCandidat(AttributsBase):
     phone2: str | None = None
     town: str | None = None
     country: str | None = None
-    source: SourceOuOrigine | None = None
+    source: SourceOrOrigin | None = None
     numberOfResumes: int | None = None
     numberOfActivePositionings: int | None = None
-    socialNetworks: list[ReseauSocial] = Field(default_factory=list)
+    socialNetworks: list[SocialNetwork] = Field(default_factory=list)
     diplomas: list[str] = Field(default_factory=list)
     activityAreas: list[str] = Field(default_factory=list)
     globalEvaluation: str | None = None
-    languages: list[LangueParlee] = Field(default_factory=list)
+    languages: list[SpokenLanguage] = Field(default_factory=list)
     expertiseAreas: list[str] = Field(default_factory=list)
     experience: int | None = None
-    references: list[ReferenceCvCandidat] = Field(default_factory=list)
-    evaluations: list[EvaluationCandidat] = Field(default_factory=list)
-    tools: list[OutilNote] = Field(default_factory=list)
+    references: list[CandidateResumeReference] = Field(default_factory=list)
+    evaluations: list[CandidateEvaluation] = Field(default_factory=list)
+    tools: list[RatingTool] = Field(default_factory=list)
     canShowTechnicalData: bool | None = None
     canShowActions: bool | None = None
 
 
-class Candidat(Permissif):
+class Candidate(Permissive):
     id: str
     type: str = "candidate"
-    attributes: AttributsCandidat
-    relationships: RelationsCandidat | None = None
+    attributes: CandidateAttributes
+    relationships: CandidateRelations | None = None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Agence, business unit, pôle, rôle
+#  Agency, business unit, pole, role
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-class AttributsAgence(AttributsBase):
+class AgencyAttributes(BaseAttributes):
     name: str
     calendar: str | None = None
     currency: int | None = None
@@ -426,39 +426,39 @@ class AttributsAgence(AttributsBase):
     subDivision: str | None = None
 
 
-class Agence(Permissif):
+class Agency(Permissive):
     id: str
     type: str = "agency"
-    attributes: AttributsAgence
+    attributes: AgencyAttributes
 
 
-class RelationsUniteOperationnelle(Permissif):
-    includedManagers: RelationListe | None = None
+class BusinessUnitRelations(Permissive):
+    includedManagers: RelationList | None = None
 
 
-class AttributsUniteOperationnelle(AttributsBase):
+class BusinessUnitAttributes(BaseAttributes):
     name: str
 
 
-class UniteOperationnelle(Permissif):
+class BusinessUnit(Permissive):
     id: str
     type: str = "businessunit"
-    attributes: AttributsUniteOperationnelle
-    relationships: RelationsUniteOperationnelle | None = None
+    attributes: BusinessUnitAttributes
+    relationships: BusinessUnitRelations | None = None
 
 
-class AttributsPole(AttributsBase):
+class PoleAttributes(BaseAttributes):
     name: str
     state: bool | None = None
 
 
-class Pole(Permissif):
+class Pole(Permissive):
     id: str
     type: str = "pole"
-    attributes: AttributsPole
+    attributes: PoleAttributes
 
 
-class AttributsRole(AttributsBase):
+class RoleAttributes(BaseAttributes):
     name: str
     numberOfAccounts: float | None = None
     numberOfActiveAccounts: float | None = None
@@ -468,24 +468,24 @@ class AttributsRole(AttributsBase):
     isSystem: bool | None = None
 
 
-class Role(Permissif):
+class Role(Permissive):
     id: str
     type: str = "role"
-    attributes: AttributsRole
+    attributes: RoleAttributes
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  CRM : société, contact, opportunité, action
+#  CRM: company, contact, opportunity, action
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-class RelationsSociete(Permissif):
+class CompanyRelations(Permissive):
     mainManager: Relation | None = None
     agency: Relation | None = None
     pole: Relation | None = None
 
 
-class AttributsSociete(AttributsBase):
+class CompanyAttributes(BaseAttributes):
     name: str
     expertiseArea: str | None = None
     state: int | None = None
@@ -497,131 +497,128 @@ class AttributsSociete(AttributsBase):
     country: str | None = None
     creationDate: str | None = None
     updateDate: str | None = None
-    socialNetworks: list[ReseauSocial] = Field(default_factory=list)
+    socialNetworks: list[SocialNetwork] = Field(default_factory=list)
 
 
-class Societe(Permissif):
+class Company(Permissive):
     id: str
     type: str = "company"
-    attributes: AttributsSociete
-    relationships: RelationsSociete | None = None
+    attributes: CompanyAttributes
+    relationships: CompanyRelations | None = None
 
 
-# ── Onglet « information » d'une société — là où vit le rattachement au groupe ─
+# ── A company's "information" tab — where the group linkage lives ───────────
 
 
-def _type_non_observe(nom: str) -> dict[str, Any]:
-    """Le NOM est relevé en production, le TYPE et la valeur ne le sont pas."""
+def _unobserved_type(name: str) -> dict[str, Any]:
+    """The NAME is observed in production, the TYPE and value are not."""
     return unverified(
-        f"`{nom}` : nom d'attribut OBSERVÉ sur /companies/{{id}}/information "
-        "(2026-09-13, noms seulement). Type et valeurs NON observés — ceux du "
-        "mock sont plausibles, pas attestés."
+        f"`{name}`: attribute name OBSERVED on /companies/{{id}}/information "
+        "(2026-09-13, names only). Type and values NOT observed — the mock's "
+        "are plausible, not attested."
     )
 
 
-class RelationsInformationSociete(Permissif):
-    """Les HUIT relations relevées en réel le 2026-09-13 — ni plus, ni moins.
+class CompanyInformationRelations(Permissive):
+    """The EIGHT relationships observed live on 2026-09-13 — no more, no less.
 
-    ┌─ LE GROUPE N'EST SERVI QU'ICI ─────────────────────────────────────────────┐
-    │ Sonde lecture seule du 2026-09-13 : `GET /companies` (liste) et            │
-    │ `GET /companies/{id}` (profil) ne portent QUE `agency`, `mainManager`,     │
-    │ `pole`. Le rattachement société → groupe n'existe que sur cet onglet.      │
+    ┌─ THE GROUP IS ONLY SERVED HERE ────────────────────────────────────────────┐
+    │ Read-only probe from 2026-09-13: `GET /companies` (list) and               │
+    │ `GET /companies/{id}` (profile) carry ONLY `agency`, `mainManager`,        │
+    │ `pole`. The company → group linkage only exists on this tab.               │
     │                                                                            │
-    │   parentCompany : `null`, ou `{id, type: "company"}` — renseigné sur ~6    │
-    │                   fiches sur 20 échantillonnées ;                          │
-    │   subsidiaries  : LISTE de `{id, type: "company"}`, vide sans filiale.     │
+    │   parentCompany : `null`, or `{id, type: "company"}` — set on ~6          │
+    │                   profiles out of 20 sampled;                              │
+    │   subsidiaries  : LIST of `{id, type: "company"}`, empty when none.       │
     │                                                                            │
-    │ Les deux sens sont COHÉRENTS en réel : la fiche d'un groupe listait 16     │
-    │ filiales, et chacune pointait vers lui par `parentCompany`. Le mock DÉRIVE │
-    │ `subsidiaries` de `parentCompany` pour garantir la même propriété.         │
+    │ Both directions are CONSISTENT in reality: one group's profile listed 16   │
+    │ subsidiaries, and each pointed back to it via `parentCompany`. The mock    │
+    │ DERIVES `subsidiaries` from `parentCompany` to guarantee the same         │
+    │ property.                                                                  │
     └────────────────────────────────────────────────────────────────────────────┘
     """
 
     agency: Relation | None = None
     createdBy: Relation | None = None
-    files: RelationListe | None = None
-    influencers: RelationListe | None = None
+    files: RelationList | None = None
+    influencers: RelationList | None = None
     mainManager: Relation | None = None
     parentCompany: Relation | None = Field(
         default=None,
         description="The group this company belongs to — `data: null` when none.",
     )
     pole: Relation | None = None
-    subsidiaries: RelationListe | None = Field(
+    subsidiaries: RelationList | None = Field(
         default=None,
         description="Companies whose `parentCompany` is this one — empty list when none.",
     )
 
 
-class AttributsInformationSociete(Permissif):
-    """`GET /companies/{id}/information` — les VINGT-SEPT attributs relevés en
-    réel le 2026-09-13 (type JSON:API `company`).
+class CompanyInformationAttributes(Permissive):
+    """`GET /companies/{id}/information` — the TWENTY-SEVEN attributes observed
+    live on 2026-09-13 (JSON:API type `company`).
 
-    Seuls les NOMS ont été observés. Les types des attributs déjà servis par la
-    recherche (`AttributsSociete`) sont repris ; tous les autres sont marqués
-    `unverified` et inscrits dans docs/UNVERIFIED-FIELDS.md.
+    Only the NAMES have been observed. The types of attributes already served
+    by search (`CompanyAttributes`) are reused; all others are marked
+    `unverified` and registered in docs/UNVERIFIED-FIELDS.md.
     """
 
-    address: str | None = Field(default=None, json_schema_extra=_type_non_observe("address"))
-    apeCode: str | None = Field(default=None, json_schema_extra=_type_non_observe("apeCode"))
+    address: str | None = Field(default=None, json_schema_extra=_unobserved_type("address"))
+    apeCode: str | None = Field(default=None, json_schema_extra=_unobserved_type("apeCode"))
     billingDetails: list[dict[str, Any]] = Field(
-        default_factory=list, json_schema_extra=_type_non_observe("billingDetails")
+        default_factory=list, json_schema_extra=_unobserved_type("billingDetails")
     )
     country: str | None = None
     creationDate: str | None = None
     creationSource: str | None = Field(
-        default=None, json_schema_extra=_type_non_observe("creationSource")
+        default=None, json_schema_extra=_unobserved_type("creationSource")
     )
     departments: list[str] = Field(
-        default_factory=list, json_schema_extra=_type_non_observe("departments")
+        default_factory=list, json_schema_extra=_unobserved_type("departments")
     )
     expertiseArea: str | None = None
-    fax: str | None = Field(default=None, json_schema_extra=_type_non_observe("fax"))
+    fax: str | None = Field(default=None, json_schema_extra=_unobserved_type("fax"))
     informationComments: str | None = None
-    legalStatus: str | None = Field(
-        default=None, json_schema_extra=_type_non_observe("legalStatus")
-    )
+    legalStatus: str | None = Field(default=None, json_schema_extra=_unobserved_type("legalStatus"))
     name: str
-    number: str | None = Field(default=None, json_schema_extra=_type_non_observe("number"))
-    origin: SourceOuOrigine | None = Field(
-        default=None, json_schema_extra=_type_non_observe("origin")
+    number: str | None = Field(default=None, json_schema_extra=_unobserved_type("number"))
+    origin: SourceOrOrigin | None = Field(
+        default=None, json_schema_extra=_unobserved_type("origin")
     )
     phone1: str | None = None
-    postcode: str | None = Field(default=None, json_schema_extra=_type_non_observe("postcode"))
+    postcode: str | None = Field(default=None, json_schema_extra=_unobserved_type("postcode"))
     registeredOffice: bool | None = Field(
-        default=None, json_schema_extra=_type_non_observe("registeredOffice")
+        default=None, json_schema_extra=_unobserved_type("registeredOffice")
     )
     registrationNumber: str | None = Field(
-        default=None, json_schema_extra=_type_non_observe("registrationNumber")
+        default=None, json_schema_extra=_unobserved_type("registrationNumber")
     )
-    socialNetworks: list[ReseauSocial] = Field(default_factory=list)
-    staff: int | None = Field(default=None, json_schema_extra=_type_non_observe("staff"))
+    socialNetworks: list[SocialNetwork] = Field(default_factory=list)
+    staff: int | None = Field(default=None, json_schema_extra=_unobserved_type("staff"))
     state: int | None = None
-    subDivision: str | None = Field(
-        default=None, json_schema_extra=_type_non_observe("subDivision")
-    )
+    subDivision: str | None = Field(default=None, json_schema_extra=_unobserved_type("subDivision"))
     thumbnail: str | None = None
     town: str | None = None
     updateDate: str | None = None
-    vatNumber: str | None = Field(default=None, json_schema_extra=_type_non_observe("vatNumber"))
+    vatNumber: str | None = Field(default=None, json_schema_extra=_unobserved_type("vatNumber"))
     website: str | None = None
 
 
-class InformationSociete(Permissif):
+class CompanyInformation(Permissive):
     id: str
     type: str = "company"
-    attributes: AttributsInformationSociete
-    relationships: RelationsInformationSociete | None = None
+    attributes: CompanyInformationAttributes
+    relationships: CompanyInformationRelations | None = None
 
 
-class RelationsContact(Permissif):
+class ContactRelations(Permissive):
     mainManager: Relation | None = None
     company: Relation | None = None
     agency: Relation | None = None
     pole: Relation | None = None
 
 
-class AttributsContact(AttributsBase):
+class ContactAttributes(BaseAttributes):
     creationDate: str | None = None
     civility: int | None = None
     thumbnail: str | None = None
@@ -641,18 +638,18 @@ class AttributsContact(AttributsBase):
     canWriteContact: bool | None = None
     canShowAction: bool | None = None
     typesOf: list[str] = Field(default_factory=list)
-    socialNetworks: list[ReseauSocial] = Field(default_factory=list)
+    socialNetworks: list[SocialNetwork] = Field(default_factory=list)
     updateDate: str | None = None
 
 
-class Contact(Permissif):
+class Contact(Permissive):
     id: str
     type: str = "contact"
-    attributes: AttributsContact
-    relationships: RelationsContact | None = None
+    attributes: ContactAttributes
+    relationships: ContactRelations | None = None
 
 
-class RelationsOpportunite(Permissif):
+class OpportunityRelations(Permissive):
     mainManager: Relation | None = None
     agency: Relation | None = None
     pole: Relation | None = None
@@ -661,7 +658,7 @@ class RelationsOpportunite(Permissif):
     parsingJob: Relation | None = None
 
 
-class AttributsOpportunite(AttributsBase):
+class OpportunityAttributes(BaseAttributes):
     creationDate: str | None = None
     title: str
     reference: str | None = None
@@ -693,23 +690,23 @@ class AttributsOpportunite(AttributsBase):
     turnoverEstimatedExcludingTax: float | None = None
     expertiseArea: str | None = None
     activityAreas: list[str] = Field(default_factory=list)
-    origin: SourceOuOrigine | None = None
+    origin: SourceOrOrigin | None = None
     tools: list[str] = Field(default_factory=list)
     numberOfActivePositionings: int | None = None
     canShowContact: bool | None = None
     canShowCompany: bool | None = None
-    stateReason: RaisonEtat | None = None
+    stateReason: StateReason | None = None
     updateDate: str | None = None
 
 
-class Opportunite(Permissif):
+class Opportunity(Permissive):
     id: str
     type: str = "opportunity"
-    attributes: AttributsOpportunite
-    relationships: RelationsOpportunite | None = None
+    attributes: OpportunityAttributes
+    relationships: OpportunityRelations | None = None
 
 
-class RelationsAction(Permissif):
+class ActionRelations(Permissive):
     mainManager: Relation | None = None
     dependsOn: Relation | None = Field(
         default=None,
@@ -717,10 +714,10 @@ class RelationsAction(Permissif):
         "project, resource, invoice…",
     )
     company: Relation | None = None
-    relatedActions: RelationListe | None = None
+    relatedActions: RelationList | None = None
 
 
-class AttributsAction(AttributsBase):
+class ActionAttributes(BaseAttributes):
     startDate: str | None = None
     creationDate: str | None = None
     typeOf: int | None = Field(default=None, description="Per-entity instance dictionary.")
@@ -731,19 +728,19 @@ class AttributsAction(AttributsBase):
     updateDate: str | None = None
 
 
-class ActionCrm(Permissif):
+class CrmAction(Permissive):
     id: str
     type: str = "action"
-    attributes: AttributsAction
-    relationships: RelationsAction | None = None
+    attributes: ActionAttributes
+    relationships: ActionRelations | None = None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Production : projet, mission (delivery)
+#  Production: project, delivery
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-class RelationsProjet(Permissif):
+class ProjectRelations(Permissive):
     mainManager: Relation | None = None
     opportunity: Relation | None = None
     contact: Relation | None = None
@@ -754,7 +751,7 @@ class RelationsProjet(Permissif):
     intermediaryContact: Relation | None = None
 
 
-class AttributsProjet(AttributsBase):
+class ProjectAttributes(BaseAttributes):
     startDate: str | None = None
     endDate: str | None = None
     typeOf: int | None = None
@@ -783,14 +780,14 @@ class AttributsProjet(AttributsBase):
     updateDate: str | None = None
 
 
-class Projet(Permissif):
+class Project(Permissive):
     id: str
     type: str = "project"
-    attributes: AttributsProjet
-    relationships: RelationsProjet | None = None
+    attributes: ProjectAttributes
+    relationships: ProjectRelations | None = None
 
 
-class RelationsMission(Permissif):
+class DeliveryRelations(Permissive):
     project: Relation | None = None
     dependsOn: Relation | None = Field(
         default=None, description="The resource (or product) staffed on the delivery."
@@ -798,7 +795,7 @@ class RelationsMission(Permissif):
     purchase: Relation | None = None
 
 
-class AttributsMission(AttributsBase):
+class DeliveryAttributes(BaseAttributes):
     """GET /deliveries search does not exist (405 observed): these attributes
     follow the official delivery PROFILE schema, served on /deliveries/{id}."""
 
@@ -840,24 +837,24 @@ class AttributsMission(AttributsBase):
     isTurnoverProductionIncluded: bool | None = None
 
 
-class Mission(Permissif):
+class Delivery(Permissive):
     id: str
     type: str = "delivery"
-    attributes: AttributsMission
-    relationships: RelationsMission | None = None
+    attributes: DeliveryAttributes
+    relationships: DeliveryRelations | None = None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Facturation : commande, facture, achat, paiement, banque
+#  Billing: order, invoice, purchase, payment, bank
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-class RelationsCommande(Permissif):
+class OrderRelations(Permissive):
     mainManager: Relation | None = None
     project: Relation | None = None
 
 
-class AttributsCommande(AttributsBase):
+class OrderAttributes(BaseAttributes):
     date: str | None = None
     number: str | None = None
     reference: str | None = None
@@ -866,37 +863,37 @@ class AttributsCommande(AttributsBase):
     turnoverOrderedExcludingTax: float | None = None
     deltaInvoicedExcludingTax: float | None = None
     state: int | None = None
-    # NI `creationDate` NI `updateDate` : le vendeur n'en rend AUCUN des deux.
-    # Sondé le 2026-08-12 — `/orders` est la seule des dix-huit collections à
-    # manquer `updateDate`, et son atterrissage dlt en production ne porte pas
-    # `creation_date` non plus.
+    # NEITHER `creationDate` NOR `updateDate`: the vendor renders NEITHER of
+    # the two. Probed 2026-08-12 — `/orders` is the only one of the eighteen
+    # collections missing `updateDate`, and its dlt landing in production does
+    # not carry `creation_date` either.
     #
-    # `updateDate` porte la stratégie d'extraction du consommateur : le servir
-    # ici lui a fait déclarer la collection incrémentale, et dlt a levé
-    # `IncrementalCursorPathMissing` au premier run réel.
+    # `updateDate` drives the consumer's extraction strategy: serving it here
+    # made it declare the collection incremental, and dlt raised
+    # `IncrementalCursorPathMissing` on the first real run.
     #
-    # `creationDate` a été gardé en 0.6.0 au motif qu'« il ne pilote aucune
-    # stratégie, donc le servir ne coûte rien ». C'était faux : un modèle qui LIT
-    # une colonne a besoin qu'elle EXISTE, et `stg_commande` est tombé sur
-    # « column o.creation_date does not exist » au run suivant. La règle
-    # n'admet donc pas d'exception « inoffensive ».
+    # `creationDate` was kept in 0.6.0 on the grounds that "it drives no
+    # strategy, so serving it costs nothing". That was false: a model that
+    # READS a column needs it to EXIST, and `stg_commande` hit
+    # "column o.creation_date does not exist" on the next run. The rule
+    # therefore admits no "harmless" exception.
     #
-    # `date` reste : c'est la date de commande, et elle est bien rendue en réel.
+    # `date` stays: it is the order date, and it is indeed rendered for real.
 
 
-class Commande(Permissif):
+class Order(Permissive):
     id: str
     type: str = "order"
-    attributes: AttributsCommande
-    relationships: RelationsCommande | None = None
+    attributes: OrderAttributes
+    relationships: OrderRelations | None = None
 
 
-class RelationsFacture(Permissif):
+class InvoiceRelations(Permissive):
     order: Relation | None = None
     schedule: Relation | None = None
 
 
-class AttributsFacture(AttributsBase):
+class InvoiceAttributes(BaseAttributes):
     date: str | None = None
     expectedPaymentDate: str | None = None
     turnoverInvoicedExcludingTax: float | None = None
@@ -927,14 +924,14 @@ class AttributsFacture(AttributsBase):
     canSendWithPennylane: bool | None = None
 
 
-class Facture(Permissif):
+class Invoice(Permissive):
     id: str
     type: str = "invoice"
-    attributes: AttributsFacture
-    relationships: RelationsFacture | None = None
+    attributes: InvoiceAttributes
+    relationships: InvoiceRelations | None = None
 
 
-class RelationsAchat(Permissif):
+class PurchaseRelations(Permissive):
     mainManager: Relation | None = None
     project: Relation | None = None
     delivery: Relation | None = None
@@ -944,7 +941,7 @@ class RelationsAchat(Permissif):
     pole: Relation | None = None
 
 
-class AttributsAchat(AttributsBase):
+class PurchaseAttributes(BaseAttributes):
     date: str | None = None
     title: str | None = None
     subscription: int | None = None
@@ -965,18 +962,18 @@ class AttributsAchat(AttributsBase):
     updateDate: str | None = None
 
 
-class Achat(Permissif):
+class Purchase(Permissive):
     id: str
     type: str = "purchase"
-    attributes: AttributsAchat
-    relationships: RelationsAchat | None = None
+    attributes: PurchaseAttributes
+    relationships: PurchaseRelations | None = None
 
 
-class RelationsPaiement(Permissif):
+class PaymentRelations(Permissive):
     purchase: Relation | None = None
 
 
-class AttributsPaiement(AttributsBase):
+class PaymentAttributes(BaseAttributes):
     date: str | None = None
     performedDate: str | None = None
     expectedDate: str | None = None
@@ -990,43 +987,43 @@ class AttributsPaiement(AttributsBase):
     updateDate: str | None = None
 
 
-class Paiement(Permissif):
+class Payment(Permissive):
     id: str
     type: str = "payment"
-    attributes: AttributsPaiement
-    relationships: RelationsPaiement | None = None
+    attributes: PaymentAttributes
+    relationships: PaymentRelations | None = None
 
 
-class RelationsTransactionBancaire(Permissif):
+class BankingTransactionRelations(Permissive):
     account: Relation | None = None
 
 
-class AttributsTransactionBancaire(AttributsBase):
+class BankingTransactionAttributes(BaseAttributes):
     amount: float | None = None
     currency: int | None = None
     date: str | None = None
     numberOfInvoices: int | None = None
     title: str | None = None
-    state: int | None = Field(default=None, description="0 | 1 | 2 | 3 (rapprochement).")
+    state: int | None = Field(default=None, description="0 | 1 | 2 | 3 (reconciliation).")
     totalAmountToReconcile: float | None = None
     canReadTransaction: bool | None = None
     canWriteTransaction: bool | None = None
     canReconcile: bool | None = None
 
 
-class TransactionBancaire(Permissif):
+class BankingTransaction(Permissive):
     id: str
     type: str = "bankingtransaction"
-    attributes: AttributsTransactionBancaire
-    relationships: RelationsTransactionBancaire | None = None
+    attributes: BankingTransactionAttributes
+    relationships: BankingTransactionRelations | None = None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  RH : contrat
+#  HR: contract
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-class RelationsContrat(Permissif):
+class ContractRelations(Permissive):
     dependsOn: Relation | None = Field(
         default=None, description="The resource (or candidate) holding the contract."
     )
@@ -1034,10 +1031,10 @@ class RelationsContrat(Permissif):
     agency: Relation | None = None
     parentContract: Relation | None = None
     childContract: Relation | None = None
-    files: RelationListe | None = None
+    files: RelationList | None = None
 
 
-class AttributsContrat(AttributsBase):
+class ContractAttributes(BaseAttributes):
     """GET /contracts search does not exist (405/WAF observed): these
     attributes follow the contract PROFILE shape as observed on
     /contracts/{id} (30 attributes)."""
@@ -1061,12 +1058,12 @@ class AttributsContrat(AttributsBase):
     monthlyExpenses: float | None = None
     numberOfWorkingDays: float | None = None
     chargeFactor: float | None = None
-    expensesDetails: list[DetailFraisContrat] = Field(default_factory=list)
-    advantageTypes: list[TypeAvantageContrat] = Field(default_factory=list)
+    expensesDetails: list[ContractExpenseDetail] = Field(default_factory=list)
+    advantageTypes: list[ContractAdvantageType] = Field(default_factory=list)
     informationComments: str | None = None
-    # ── OBSERVED 2026-09-10, and previously listed as « never observed » ─────
-    # UNVERIFIED-FIELDS put these three in the « documented in the RAML, never
-    # returned » matrix. They ARE returned by the tenant probed: probationEndDate
+    # ── OBSERVED 2026-09-10, and previously listed as "never observed" ───────
+    # UNVERIFIED-FIELDS put these three in the "documented in the RAML, never
+    # returned" matrix. They ARE returned by the tenant probed: probationEndDate
     # on 12 of 18 contracts, renewalProbationEndDate on the same 12,
     # contractAverageDailyProductionCost on 1. Emission is SPARSE — the key is
     # absent item by item, not null — so the mock omits them the same way.
@@ -1083,21 +1080,21 @@ class AttributsContrat(AttributsBase):
     isPartialWorkTimeEvenOdd: bool | None = None
 
 
-class Contrat(Permissif):
+class Contract(Permissive):
     id: str
     type: str = "contract"
-    attributes: AttributsContrat
-    relationships: RelationsContrat | None = None
+    attributes: ContractAttributes
+    relationships: ContractRelations | None = None
 
 
-class RelationsAvantageVerse(Permissif):
+class AdvantageRelations(Permissive):
     contract: Relation | None = Field(
         default=None, description="The contract the advantage was paid under."
     )
     agency: Relation | None = None
 
 
-class AttributsAvantageVerse(Permissif):
+class AdvantageAttributes(Permissive):
     """A benefit actually PAID — shape OBSERVED on `/resources/{id}/advantages`.
 
     Probed 2026-09-10: 200 OK, `meta.totals.rows` = 54 on one resource, history
@@ -1127,19 +1124,19 @@ class AttributsAvantageVerse(Permissif):
     )
 
 
-class AvantageVerse(Permissif):
+class Advantage(Permissive):
     id: str
     type: str = "advantage"
-    attributes: AttributsAvantageVerse
-    relationships: RelationsAvantageVerse | None = None
+    attributes: AdvantageAttributes
+    relationships: AdvantageRelations | None = None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Activité : absence, temps, CRA, frais
+#  Activity: absence, time, timesheet, expense
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-class AttributsAbsence(AttributsBase):
+class AbsenceAttributes(BaseAttributes):
     """An absence's whole context is EMBEDDED here — no relationships;
     that is the real /absences dialect."""
 
@@ -1147,44 +1144,44 @@ class AttributsAbsence(AttributsBase):
     endDate: str | None = None
     duration: float | None = None
     title: str | None = None
-    workUnitType: UniteOeuvre | None = None
-    absencesReport: RapportAbsences | None = None
+    workUnitType: WorkUnit | None = None
+    absencesReport: AbsencesReport | None = None
 
 
-class Absence(Permissif):
+class Absence(Permissive):
     id: str
     type: str = "absence"
-    attributes: AttributsAbsence
+    attributes: AbsenceAttributes
 
 
-class RelationsTemps(Permissif):
+class TimeRelations(Permissive):
     timesReport: Relation | None = None
     delivery: Relation | None = None
     batch: Relation | None = None
     project: Relation | None = None
 
 
-class AttributsTemps(AttributsBase):
+class TimeAttributes(BaseAttributes):
     category: str | None = Field(default=None, description="regular | exceptional")
-    workUnitType: UniteOeuvre | None = None
+    workUnitType: WorkUnit | None = None
     row: int | None = None
     startDate: str | None = None
     duration: float | None = None
 
 
-class Temps(Permissif):
+class Time(Permissive):
     id: str
     type: str = "time"
-    attributes: AttributsTemps
-    relationships: RelationsTemps | None = None
+    attributes: TimeAttributes
+    relationships: TimeRelations | None = None
 
 
-class RelationsCra(Permissif):
+class TimesReportRelations(Permissive):
     agency: Relation | None = None
     resource: Relation | None = None
 
 
-class AttributsCra(AttributsBase):
+class TimesReportAttributes(BaseAttributes):
     term: str | None = Field(default=None, description="YYYY-MM")
     state: str | None = Field(
         default=None,
@@ -1193,19 +1190,19 @@ class AttributsCra(AttributsBase):
     closed: bool | None = None
 
 
-class Cra(Permissif):
+class TimesReport(Permissive):
     id: str
     type: str = "timesreport"
-    attributes: AttributsCra
-    relationships: RelationsCra | None = None
+    attributes: TimesReportAttributes
+    relationships: TimesReportRelations | None = None
 
 
-class AttributsFrais(AttributsBase):
+class ExpenseAttributes(BaseAttributes):
     """Like /absences: report, delivery and project EMBEDDED in attributes."""
 
     category: str | None = Field(default=None, description="actual | fixed")
     activityType: str | None = None
-    expenseType: TypeFrais | None = None
+    expenseType: ExpenseType | None = None
     row: int | None = None
     startDate: str | None = None
     reinvoiced: bool | None = None
@@ -1217,28 +1214,28 @@ class AttributsFrais(AttributsBase):
     currency: int | None = None
     exchangeRate: float | None = None
     isKilometricExpense: bool | None = None
-    expensesReport: RapportFrais | None = None
-    delivery: MissionImbriquee | None = None
+    expensesReport: ExpensesReport | None = None
+    delivery: NestedDelivery | None = None
     batch: dict[str, Any] | None = None
-    project: ProjetImbrique | None = None
-    guestResources: list[InviteFrais] = Field(default_factory=list)
+    project: NestedProject | None = None
+    guestResources: list[ExpenseGuest] = Field(default_factory=list)
 
 
-class Frais(Permissif):
+class Expense(Permissive):
     id: str
     type: str = "expense"
-    attributes: AttributsFrais
+    attributes: ExpenseAttributes
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Onglet administratif d'une ressource — là où vivent les contrats
+#  A resource's administrative tab — where contracts live
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-class RelationsAdministratif(Permissif):
+class ResourceAdministrativeRelations(Permissive):
     agency: Relation | None = None
     candidate: Relation | None = None
-    contracts: RelationListe | None = Field(
+    contracts: RelationList | None = Field(
         default=None,
         description="The resource's CONTRACTS — the official path to fetch them.",
     )
@@ -1246,10 +1243,10 @@ class RelationsAdministratif(Permissif):
     providerCompany: Relation | None = Field(
         default=None, description="The supplying company, for a subcontractor."
     )
-    files: RelationListe | None = None
+    files: RelationList | None = None
 
 
-class AttributsAdministratif(Permissif):
+class ResourceAdministrativeAttributes(Permissive):
     """`GET /resources/{id}/administrative` — official schema
     `resources/administrative.json` (JSON:API type `resource`)."""
 
@@ -1272,19 +1269,19 @@ class AttributsAdministratif(Permissif):
     validitySeniorityDate: str | None = None
 
 
-class AdministratifRessource(Permissif):
+class ResourceAdministrative(Permissive):
     id: str
     type: str = "resource"
-    attributes: AttributsAdministratif
-    relationships: RelationsAdministratif | None = None
+    attributes: ResourceAdministrativeAttributes
+    relationships: ResourceAdministrativeRelations | None = None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Affordances conservées : dossier technique, identité
+#  Affordances kept: technical data, identity
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-class AttributsDonneesTechniques(Permissif):
+class TechnicalDataAttributes(Permissive):
     """`GET /resources/{id}/technical-data` — REAL shape observed: type
     `resource`, fifteen attributes, no relationships nor included."""
 
@@ -1293,7 +1290,7 @@ class AttributsDonneesTechniques(Permissif):
     diplomas: list[str] = Field(default_factory=list)
     experience: int | None = None
     expertiseAreas: list[str] = Field(default_factory=list)
-    languages: list[LangueParlee] = Field(default_factory=list)
+    languages: list[SpokenLanguage] = Field(default_factory=list)
     references: list[dict[str, Any]] = Field(
         default_factory=list,
         description="The résumé experiences. The only place they live in detail.",
@@ -1304,17 +1301,17 @@ class AttributsDonneesTechniques(Permissif):
     tdId: str | None = None
     tdLink: str | None = None
     title: str | None = None
-    tools: list[OutilNote] = Field(default_factory=list)
+    tools: list[RatingTool] = Field(default_factory=list)
     training: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class DonneesTechniques(Permissif):
+class TechnicalData(Permissive):
     id: str
     type: str = "resource"
-    attributes: AttributsDonneesTechniques
+    attributes: TechnicalDataAttributes
 
 
-class AttributsUtilisateurCourant(Permissif):
+class CurrentUserAttributes(Permissive):
     """`GET /application/current-user` — real type `currentuser` (observed),
     the attribute subset consumers rely on."""
 
@@ -1328,24 +1325,24 @@ class AttributsUtilisateurCourant(Permissif):
     language: str | None = None
 
 
-class RelationsUtilisateurCourant(Permissif):
+class CurrentUserRelations(Permissive):
     agency: Relation | None = None
     role: Relation | None = None
 
 
-class UtilisateurCourant(Permissif):
+class CurrentUser(Permissive):
     id: str
     type: str = "currentuser"
-    attributes: AttributsUtilisateurCourant
-    relationships: RelationsUtilisateurCourant | None = None
+    attributes: CurrentUserAttributes
+    relationships: CurrentUserRelations | None = None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Profils — les formes de DÉTAIL relevées en réel (≠ recherches)
+#  Profiles — the DETAIL shapes observed for real (≠ searches)
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-class AttributsProfilRessource(Permissif):
+class ResourceProfileAttributes(Permissive):
     """Real `GET /resources/{id}`: eighteen attributes, distinct from search."""
 
     creationDate: str | None = None
@@ -1368,25 +1365,25 @@ class AttributsProfilRessource(Permissif):
     creationSource: str | None = None
 
 
-class RelationsProfilRessource(Permissif):
+class ResourceProfileRelations(Permissive):
     mainManager: Relation | None = None
     hrManager: Relation | None = None
     agency: Relation | None = None
     pole: Relation | None = None
-    contracts: RelationListe | None = Field(
+    contracts: RelationList | None = Field(
         default=None,
-        description="LES CONTRATS de la ressource — le chemin officiel, validé en prod.",
+        description="The resource's CONTRACTS — the official path, validated in prod.",
     )
 
 
-class ProfilRessource(Permissif):
+class ResourceProfile(Permissive):
     id: str
     type: str = "resource"
-    attributes: AttributsProfilRessource
-    relationships: RelationsProfilRessource | None = None
+    attributes: ResourceProfileAttributes
+    relationships: ResourceProfileRelations | None = None
 
 
-class AttributsProfilProjet(Permissif):
+class ProjectProfileAttributes(Permissive):
     """Real `GET /projects/{id}`: thirteen attributes — without `endDate`."""
 
     creationDate: str | None = None
@@ -1404,7 +1401,7 @@ class AttributsProfilProjet(Permissif):
     workUnitRate: float | None = None
 
 
-class RelationsProfilProjet(Permissif):
+class ProjectProfileRelations(Permissive):
     agency: Relation | None = None
     company: Relation | None = None
     mainManager: Relation | None = None
@@ -1412,8 +1409,8 @@ class RelationsProfilProjet(Permissif):
     pole: Relation | None = None
 
 
-class ProfilProjet(Permissif):
+class ProjectProfile(Permissive):
     id: str
     type: str = "project"
-    attributes: AttributsProfilProjet
-    relationships: RelationsProfilProjet | None = None
+    attributes: ProjectProfileAttributes
+    relationships: ProjectProfileRelations | None = None

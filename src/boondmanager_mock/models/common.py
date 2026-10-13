@@ -1,23 +1,24 @@
-"""Modèles pydantic — la SOURCE du contrat OpenAPI.
+"""Pydantic models — the SOURCE of the OpenAPI contract.
 
-┌─ POURQUOI TYPER, ET CE QUE ÇA COÛTE ────────────────────────────────────────┐
-│ Avant, tous les handlers étaient `(request: Request) -> JSONResponse`. FastAPI │
-│ générait donc un `/docs` qui documentait des CHEMINS et rien d'autre : aucune  │
-│ forme de réponse, aucun champ. Un contrat vide n'est pas un contrat.          │
+┌─ WHY TYPE, AND WHAT IT COSTS ────────────────────────────────────────────────┐
+│ Before, every handler was `(request: Request) -> JSONResponse`. FastAPI      │
+│ therefore generated a `/docs` that documented PATHS and nothing else: no      │
+│ response shape, no fields. An empty contract is not a contract.              │
 │                                                                                │
-│ En typant, on obtient d'un coup : le contrat, la validation des réponses (le   │
-│ générateur ne peut plus dériver en silence de la forme déclarée), et des types │
-│ exploitables par les consommateurs.                                            │
+│ Typing gets us, in one move: the contract, response validation (the          │
+│ generator can no longer silently drift from the declared shape), and types   │
+│ consumers can actually use.                                                   │
 │                                                                                │
-│ Le coût est réel et il faut le nommer : **typer pousse à inventer des          │
-│ champs**, ce que la spec d'insights360 interdit en toutes lettres. La parade   │
-│ est structurelle, pas disciplinaire :                                          │
+│ The cost is real and worth naming: **typing pushes toward inventing          │
+│ fields**, which insights360's spec forbids in so many words. The guard is    │
+│ structural, not a matter of discipline:                                      │
 │                                                                                │
-│   • `extra="allow"` partout — un champ inconnu de l'API réelle passe, il n'est │
-│     simplement pas documenté. Le modèle décrit ce qu'on SAIT, pas ce qui EST.  │
-│   • `x-boond-confidence` sur tout champ non adossé à une preuve de production. │
-│   • un test échoue si un champ `unverified` n'est pas inscrit dans             │
-│     docs/UNVERIFIED-FIELDS.md. L'honnêteté devient une contrainte de build.    │
+│   • `extra="allow"` everywhere — a field unknown to the real API passes      │
+│     through, it is simply undocumented. The model describes what we KNOW,    │
+│     not what IS.                                                             │
+│   • `x-boond-confidence` on every field not backed by production evidence.   │
+│   • a test fails if an `unverified` field is not registered in               │
+│     docs/UNVERIFIED-FIELDS.md. Honesty becomes a build constraint.           │
 └────────────────────────────────────────────────────────────────────────────────┘
 """
 
@@ -29,25 +30,25 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 def unverified(description: str) -> dict[str, Any]:
-    """Marque un champ dont le nom ou la forme n'est PAS attesté.
+    """Marks a field whose name or shape is NOT attested.
 
-    À utiliser via `json_schema_extra`. Tout champ ainsi marqué DOIT figurer
-    dans `docs/UNVERIFIED-FIELDS.md` — `tests/test_contract_is_current.py` le
-    vérifie, pour que l'inventaire ne se dégrade pas en bonne intention.
+    Used via `json_schema_extra`. Every field so marked MUST appear in
+    `docs/UNVERIFIED-FIELDS.md` — `tests/test_contract_is_current.py` checks
+    it, so the inventory cannot quietly degrade into a good intention.
     """
     return {"x-boond-confidence": "unverified", "x-boond-note": description}
 
 
 def invented(description: str) -> dict[str, Any]:
-    """Marque un champ ou un endpoint qui n'existe PAS chez le fournisseur.
+    """Marks a field or endpoint that does NOT exist at the vendor.
 
-    Distinct de `unverified` : ici on sait qu'on a fabriqué la forme, faute
-    d'endpoint attesté. Le mode `stub` de la rémunération en est le seul usage.
+    Distinct from `unverified`: here we know the shape was fabricated, for
+    lack of an attested endpoint. The compensation `stub` mode is its only use.
     """
     return {"x-boond-confidence": "invented", "x-boond-note": description}
 
 
-class Permissif(BaseModel):
+class Permissive(BaseModel):
     """Common base: unknown fields are accepted rather than rejected.
 
     A strict model would turn every evolution of the real API into a mock
@@ -58,37 +59,37 @@ class Permissif(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 
-# ── Enveloppe JSON:API ───────────────────────────────────────────────────────
+# ── JSON:API envelope ────────────────────────────────────────────────────────
 
 
-class RefDonnee(Permissif):
+class DataRef(Permissive):
     """The `{id, type}` reference of a JSON:API relationship."""
 
     id: str
     type: str
 
 
-class Relation(Permissif):
+class Relation(Permissive):
     """A relationship. `data` may be null — an employee without a manager, say."""
 
-    data: RefDonnee | None = None
+    data: DataRef | None = None
 
 
-class Totaux(Permissif):
+class Totals(Permissive):
     rows: int = Field(description="Total number of items BEFORE pagination.")
 
 
-class Meta(Permissif):
+class Meta(Permissive):
     """The list `meta`, as the official schema describes it: `totals.rows`
     plus the server version, session state and language."""
 
-    totals: Totaux
+    totals: Totals
     version: str | None = Field(default=None, description="BoondManager version.")
     isLogged: bool | None = None
     language: str | None = Field(default=None, description="fr | en | es")
 
 
-class MetaDetail(Permissif):
+class MetaDetail(Permissive):
     """The profile `meta` — same as the list one, without `totals`."""
 
     version: str | None = None
@@ -128,10 +129,10 @@ class ItemEnvelope[T](BaseModel):
     meta: MetaDetail | None = None
 
 
-# ── Erreurs ──────────────────────────────────────────────────────────────────
+# ── Errors ───────────────────────────────────────────────────────────────────
 
 
-class Erreur(Permissif):
+class Error(Permissive):
     """One error entry — the real dialect: `status`/`code`/`detail` plus
     either `title` or `source.parameter`."""
 
@@ -148,12 +149,13 @@ class ErrorEnvelope(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    errors: list[Erreur]
+    errors: list[Error]
 
 
-# Réponses d'erreur déclarées sur chaque route : elles apparaissent au contrat
-# sans passer par `response_model`, qui ne décrit que le cas nominal.
-REPONSES_ERREUR: dict[int | str, dict[str, Any]] = {
+# Error responses declared on every route: they appear in the contract
+# without going through `response_model`, which only describes the nominal
+# case.
+ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     401: {"model": ErrorEnvelope, "description": "No credentials provided."},
     404: {"model": ErrorEnvelope, "description": "Unknown entity."},
     422: {
@@ -173,7 +175,7 @@ REPONSES_ERREUR: dict[int | str, dict[str, Any]] = {
     503: {"model": ErrorEnvelope, "description": "Injected transient failure."},
 }
 
-# Paramètres de requête partagés par toutes les collections.
+# Query parameters shared by every collection.
 ParamPage = Annotated[int, Field(ge=1, description="Page number, 1-based.")]
 ParamMaxResults = Annotated[
     int,
@@ -188,64 +190,65 @@ ParamMaxResults = Annotated[
 ]
 
 
-# ── Le dictionnaire des énumérations ─────────────────────────────────────────
+# ── The enumeration dictionary ───────────────────────────────────────────────
 
 
-class EntreeDictionnaire(Permissif):
-    """Une correspondance code -> libellé, telle que l'INSTANCE la configure.
+class DictionaryEntry(Permissive):
+    """A code -> label mapping, as the INSTANCE configures it.
 
-    C'est la seule source connue du rattachement : partout ailleurs l'API rend
-    des entiers nus, et les libellés ne sont pas des constantes du produit.
+    This is the only known source for that mapping: everywhere else the API
+    renders bare integers, and the labels are not product constants.
     """
 
-    id: int = Field(description="Le code numérique que l'API rend sur les autres routes.")
-    value: str = Field(description="Le libellé configuré, tel qu'il s'affiche dans l'outil.")
+    id: int = Field(description="The numeric code the API renders on other routes.")
+    value: str = Field(description="The configured label, as shown in the tool.")
 
 
-class SettingDictionnaire(Permissif):
-    """Les nomenclatures, groupées par famille.
+class DictionarySetting(Permissive):
+    """The nomenclatures, grouped by family.
 
-    `state` est un DICT de sous-domaines (opportunity, candidate, resource) ;
-    les autres familles sont des listes plates. Les deux formes coexistent chez
-    l'éditeur — les uniformiser ici ferait diverger le mock du dialecte réel.
+    `state` is a DICT of sub-domains (opportunity, candidate, resource); the
+    other families are flat lists. Both shapes coexist at the vendor —
+    uniformizing them here would make the mock diverge from the real dialect.
 
-    `action` et `actionOnOpportunity` sont deux nomenclatures DISTINCTES qui
-    partagent des libellés sous des codes différents. Les fondre ferait traduire
-    un type d'action de besoin par un libellé général.
+    `action` and `actionOnOpportunity` are two DISTINCT nomenclatures that
+    share labels under different codes. Merging them would translate a need's
+    action type with a general label.
     """
 
-    state: dict[str, list[EntreeDictionnaire]] = Field(
+    state: dict[str, list[DictionaryEntry]] = Field(
         json_schema_extra=invented(
-            "Sous-domaines du dictionnaire. La ROUTE n'est attestee par aucun rapport "
-            "de comparaison ; la forme est de notre fabrication."
+            "Dictionary sub-domains. The ROUTE is not attested by any "
+            "comparison report; the shape is of our own making."
         )
     )
-    action: list[EntreeDictionnaire]
-    actionOnCandidate: list[EntreeDictionnaire] = Field(
+    action: list[DictionaryEntry]
+    actionOnCandidate: list[DictionaryEntry] = Field(
         json_schema_extra=invented(
-            "Cle INFEREE de la convention de `action` et `actionOnOpportunity`. "
-            "Ce qui est atteste : une nomenclature d'actions sur candidat existe "
-            "dans l'instance (feuille Dashb du fichier de mappings)."
+            "Key INFERRED from the convention of `action` and "
+            "`actionOnOpportunity`. What is attested: an action nomenclature "
+            "on candidates exists in the instance (the Dashb sheet of the "
+            "mappings file)."
         )
     )
-    actionOnOpportunity: list[EntreeDictionnaire]
-    origin: list[EntreeDictionnaire]
-    typeOf: dict[str, list[EntreeDictionnaire]] = Field(
+    actionOnOpportunity: list[DictionaryEntry]
+    origin: list[DictionaryEntry]
+    typeOf: dict[str, list[DictionaryEntry]] = Field(
         default_factory=dict,
         json_schema_extra=invented(
-            "Symetrique de `state`. Ce qui est atteste : l'API rend un `typeOf` "
-            "entier sur resource, candidate, opportunity, project et purchase, "
-            "et n'en donne le libelle nulle part ailleurs. La FORME est de notre "
-            "fabrication, comme celle de `state`."
+            "Symmetric to `state`. What is attested: the API renders an "
+            "integer `typeOf` on resource, candidate, opportunity, project "
+            "and purchase, and gives its label nowhere else. The SHAPE is of "
+            "our own making, like `state`'s."
         ),
     )
 
 
-class DonneesDictionnaire(Permissif):
-    setting: SettingDictionnaire
+class DictionaryData(Permissive):
+    setting: DictionarySetting
 
 
-class EnveloppeDictionnaire(Permissif):
-    """`{"data": {"setting": {...}}}` — objet unique, sans pagination ni `meta`."""
+class DictionaryEnvelope(Permissive):
+    """`{"data": {"setting": {...}}}` — a single object, no pagination nor `meta`."""
 
-    data: DonneesDictionnaire
+    data: DictionaryData

@@ -1,9 +1,9 @@
-"""Configuration — tout par variables d'environnement, aucun fichier.
+"""Configuration — everything through environment variables, no file.
 
-Le mock d'origine lisait ses cinq variables au moment de l'import, ce qui
-rendait impossible d'en changer dans un test sans recharger le module. On les
-centralise ici, dans un objet relu par `reload()`, en gardant les mêmes noms de
-variables que les déploiements existants.
+The original mock read its five variables at import time, which made it
+impossible to change them in a test without reloading the module. They are
+centralized here, in an object re-read by `reload()`, keeping the same
+variable names as the existing deployments.
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-# Valeurs par défaut identiques à celles du mock d'origine : les compose et
-# charts existants ne fixent que les trois premières.
+# Defaults identical to the original mock's: the existing composes and charts
+# only set the first three.
 DEFAULTS: dict[str, str] = {
     "BOOND_MOCK_USER_TOKEN": "mock-user-token",
     "BOOND_MOCK_CLIENT_TOKEN": "mock-client-token",
@@ -31,7 +31,7 @@ def _flag(name: str, default: bool) -> bool:
 
 @dataclass
 class Settings:
-    """État de configuration, relu à chaud par `reload()`."""
+    """Configuration state, re-read live by `reload()`."""
 
     user_token: str = ""
     client_token: str = ""
@@ -39,40 +39,41 @@ class Settings:
     basic_user: str = ""
     basic_password: str = ""
 
-    # Le mock d'origine figeait la graine à 42 sans moyen d'en changer autrement
-    # qu'en Python. En conteneur, ce n'était plus possible du tout.
+    # The original mock froze the seed at 42 with no way to change it other
+    # than in Python. In a container, that was no longer possible at all.
     seed: int = 42
 
-    # Plan de contrôle /__admin. Fermé par défaut : il n'a de sens qu'en test.
+    # `/__admin` control plane. Closed by default: it only makes sense in
+    # tests.
     admin_enabled: bool = False
     admin_token: str = "mock-admin-token"
 
-    # Ordre STABLE par défaut — aligné sur le comportement observé de la vraie
-    # API (2026-07-31). Passer à false (ou injecter `unstable_order`) pour
-    # éprouver un pipeline qui pagine sans tri.
+    # STABLE order by default, aligned with the real API's observed behavior
+    # (2026-07-31). Set to false (or inject `unstable_order`) to exercise a
+    # pipeline that paginates without sorting.
     stable_order: bool = True
 
-    # `updatedSince` / `filter[updateDate][gte]` : AFFORDANCE du mock, que
-    # l'API réelle IGNORE (sondé le 2026-09-29 sur 11 modules : totaux
-    # identiques avec et sans). Désactivée par défaut depuis 0.11.0 : appliquée
-    # d'office, elle a rendu vert un client qui relisait tout en production.
+    # `updatedSince` / `filter[updateDate][gte]`: mock AFFORDANCE that the
+    # real API IGNORES (probed 2026-09-29 on 11 modules: identical totals with
+    # and without). Disabled by default since 0.11.0: applied unconditionally,
+    # it made a client that re-read everything in production look green.
     updated_since_enabled: bool = False
 
-    # Le nom du tenant annoncé dans `meta.customer`.
+    # The tenant name announced in `meta.customer`.
     customer: str = "boreal-conseil"
 
-    # Collections servies en 403 — reproduit un user token à périmètre
-    # restreint (`narrowPerimeter`), tel qu'observé sur le tenant réel.
+    # Collections served as 403 — reproduces a user token with a restricted
+    # perimeter (`narrowPerimeter`), as observed on the real tenant.
     forbidden_collections: frozenset[str] = frozenset()
 
-    # absent | csv — la fixture de rémunération hors /api (cf. README).
+    # absent | csv — the compensation fixture outside /api (see README).
     compensation_mode: str = "csv"
 
-    # ── Évolution temporelle (extraction incrémentale) ───────────────────────
-    # Le jeu de données VIT : un événement scripté toutes les
-    # `evolution_interval` secondes (nouvelles actions, staffing/déstaffing,
-    # factures réglées…). Mettre à false — ou l'intervalle à 0 — fige le jeu de
-    # données pour les usages qui exigent un contenu stable à l'octet près.
+    # ── Time evolution (incremental extraction) ──────────────────────────────
+    # The dataset LIVES: a scripted event every `evolution_interval` seconds
+    # (new actions, staffing/destaffing, invoices settled…). Setting this to
+    # false — or the interval to 0 — freezes the dataset for uses that require
+    # byte-for-byte stable content.
     evolution_enabled: bool = True
     evolution_interval: float = 60.0
 

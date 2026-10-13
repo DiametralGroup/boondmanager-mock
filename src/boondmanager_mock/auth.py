@@ -1,24 +1,24 @@
-"""Authentification — le dialecte exact de BoondManager.
+"""Authentication — BoondManager's exact dialect.
 
-Ce module porte AUSSI `build_client_jwt` et `JWT_HEADER_NAME`, qui vivaient dans
-le client de production d'ophelie (`app/boond/client.py`). C'est délibéré : le
-fichier de test du mock chez ophelie importait ces deux symboles depuis le
-client de production, ce qui couplait le mock au code applicatif. En les
-publiant ici, le mock devient testable seul, et les consommateurs (le pipeline
-dlt d'insights360, la suite de tests d'ophelie) ont une source unique pour la
-construction du jeton.
+This module ALSO carries `build_client_jwt` and `JWT_HEADER_NAME`, which used
+to live in ophelie's production client (`app/boond/client.py`). This is
+deliberate: the mock's test file at ophelie imported these two symbols from
+the production client, which coupled the mock to application code. Publishing
+them here makes the mock testable on its own, and consumers (insights360's dlt
+pipeline, ophelie's test suite) get a single source for building the token.
 
-Le client de PRODUCTION d'ophelie n'est pas déplacé : il reste chez ophelie.
+Ophelie's PRODUCTION client is not moved: it stays at ophelie.
 
-Trois détails du dialecte réel qu'il ne faut pas « simplifier » :
+Three details of the real dialect that must not be "simplified":
 
-  1. base64url SANS padding. Le padding fait échouer la vérification côté API.
-  2. Le payload est EXACTEMENT {"userToken", "clientToken"} — pas d'iat, pas
-     d'exp, pas d'iss. C'est un credential statique, pas un jeton de session.
-  3. Un JWT présent mais invalide donne **422, pas 401**. C'est ce que fait la
-     vraie API, et le code de retour est ce sur quoi une logique de retry se
-     décide : un 401 invite à re-tenter avec d'autres identifiants, un 422 dit
-     que la requête est malformée.
+  1. base64url WITHOUT padding. Padding makes verification fail on the API
+     side.
+  2. The payload is EXACTLY {"userToken", "clientToken"} — no iat, no exp, no
+     iss. It is a static credential, not a session token.
+  3. A JWT that is present but invalid returns **422, not 401**. That is what
+     the real API does, and the status code is what a retry strategy keys on:
+     a 401 invites retrying with different credentials, a 422 says the
+     request is malformed.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ JWT_HEADER_NAME = "X-Jwt-Client-Boondmanager"
 
 
 def _b64url(raw: bytes) -> str:
-    """base64url SANS padding — le `=` final ferait échouer la vérification."""
+    """base64url WITHOUT padding — a trailing `=` would make verification fail."""
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
 
@@ -43,7 +43,7 @@ def _b64url_decode(part: str) -> bytes:
 
 
 def build_client_jwt(user_token: str, client_token: str, client_key: str) -> str:
-    """Le JWT HS256 attendu dans ``X-Jwt-Client-Boondmanager``."""
+    """The HS256 JWT expected in ``X-Jwt-Client-Boondmanager``."""
     header = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
     payload = _b64url(json.dumps({"userToken": user_token, "clientToken": client_token}).encode())
     signature = _b64url(
@@ -53,10 +53,10 @@ def build_client_jwt(user_token: str, client_token: str, client_key: str) -> str
 
 
 def jwt_is_valid(token: str) -> bool:
-    """Signature ET revendications.
+    """Signature AND claims.
 
-    Vérifier la seule signature ne suffirait pas : un jeton correctement signé
-    portant d'autres tokens serait accepté. La vraie API vérifie les deux.
+    Checking the signature alone would not be enough: a correctly signed
+    token carrying other tokens would be accepted. The real API checks both.
     """
     try:
         header_b64, payload_b64, signature_b64 = token.split(".")

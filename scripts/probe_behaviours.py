@@ -40,12 +40,12 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-# Les 11 modules où le contrat documente `period=updated`.
+# The 11 modules where the contract documents `period=updated`.
 PERIOD_UPDATED = [
     "resources", "companies", "contacts", "projects", "actions", "opportunities",
     "candidates", "purchases", "invoices", "payments", "orders",
 ]  # fmt: skip
-# Modules sans le trait `sortablePaginable` au contrat.
+# Modules without the `sortablePaginable` trait in the contract.
 NOT_PAGINATED = ["agencies", "poles", "business-units"]
 FUTURE_ISO = "2099-01-01T00:00:00Z"
 PAUSE_S = 0.25
@@ -63,7 +63,7 @@ def client_jwt(user_token: str, client_token: str, client_key: str) -> str:
 
 
 def _env(name: str) -> str:
-    """`BOOND_REAL_*` comme compare_real.py, à défaut les noms du consommateur."""
+    """`BOOND_REAL_*` like compare_real.py, falling back to the consumer's names."""
     return os.environ.get(f"BOOND_REAL_{name}") or os.environ.get(f"BOOND_{name}") or ""
 
 

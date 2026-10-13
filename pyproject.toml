@@ -6,10 +6,10 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 
-# Volontairement minimales : le mock d'origine était tiré par l'image du backend
-# d'ophelie (SQLAlchemy, psycopg2, authzed, elasticsearch, boto3, mcp…) alors
-# qu'il n'a jamais eu besoin que de FastAPI et d'uvicorn. L'image dédiée est un
-# gain immédiat de taille et de surface d'attaque.
+# Deliberately minimal: the original mock was dragged along by ophelie's
+# backend image (SQLAlchemy, psycopg2, authzed, elasticsearch, boto3, mcp…)
+# when it only ever needed FastAPI and uvicorn. A dedicated image is an
+# immediate win on both size and attack surface.
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
@@ -46,13 +46,13 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PL", "ARG"]
 ignore = [
     "PLR0913",
     "PLR2004",
-    # Les imports différés sont DÉLIBÉRÉS et structurants ici :
-    #  • state.py charge le module de profil à la demande — un import au niveau
-    #    module créerait un cycle state ↔ dataset ↔ settings ;
-    #  • app.py n'importe le routeur admin QUE s'il est activé : c'est ce qui
-    #    fait que la surface est absente et pas seulement fermée ;
-    #  • les tests importent après avoir réglé l'environnement, puisque la
-    #    configuration est lue à l'import.
+    # Deferred imports are DELIBERATE and structural here:
+    #  • state.py loads the dataset profile module on demand — a module-level
+    #    import would create a state ↔ dataset ↔ settings cycle;
+    #  • app.py only imports the admin router IF it is enabled: that is what
+    #    makes the surface absent and not merely closed;
+    #  • tests import after setting up the environment, since configuration
+    #    is read at import time.
     "PLC0415",
 ]
 

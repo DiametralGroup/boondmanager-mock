@@ -1,7 +1,7 @@
-"""Le jeu de données du mock.
+"""The mock's dataset.
 
-UN SEUL profil : `realiste` — « Boréal Conseil », ESN française cohérente de
-bout en bout (RH, CRM, production, facturation, banque). Les anciens profils
-`ophelie` et `insights360` ont été supprimés au profit de ce jeu unique,
-aligné sur les schémas officiels du fournisseur.
+A SINGLE profile: `realistic` — « Boréal Conseil », a coherent French IT
+consulting firm end to end (HR, CRM, production, billing, banking). The old
+`ophelie` and `insights360` profiles have been removed in favor of this single
+dataset, aligned with the vendor's official schemas.
 """

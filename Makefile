@@ -33,11 +33,11 @@ up:          ## Run the mock in a container (docker compose up --build)
 	docker compose up --build
 
 contract:    ## Regenerate contracts/boondmanager.openapi.yaml from the app
-	@# `contrat_openapi()` rather than `app.openapi()`: the contract describes the
+	@# `contract_openapi()` rather than `app.openapi()`: the contract describes the
 	@# BoondManager DIALECT. /__admin and /__fixtures are mock affordances —
 	@# publishing them would pass off as vendor API what is not, and /__admin is
 	@# only mounted conditionally, which would make the contract depend on the
 	@# generation environment.
 	$(UV) run python -c "import yaml, boondmanager_mock as m; \
-open('contracts/boondmanager.openapi.yaml','w').write(yaml.safe_dump(m.contrat_openapi(), sort_keys=False, allow_unicode=True))"
+open('contracts/boondmanager.openapi.yaml','w').write(yaml.safe_dump(m.contract_openapi(), sort_keys=False, allow_unicode=True))"
 	@echo "✓ contract regenerated — REVIEW the diff: a changed response shape is a contract change for consumers"

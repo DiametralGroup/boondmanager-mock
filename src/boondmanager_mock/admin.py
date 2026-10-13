@@ -1,19 +1,19 @@
-"""Plan de contrôle `/__admin` — piloter les pannes par HTTP.
+"""`/__admin` control plane — controlling failures over HTTP.
 
-Pourquoi il existe : le mock d'origine ne s'injectait des pannes qu'en mutant un
-`set` Python depuis le même processus. Cela marche quand les tests montent
-l'application en process (le cas d'ophelie), et pas du tout quand le mock tourne
-en conteneur — le cas d'insights360, en docker compose comme en sidecar Tekton.
+Why it exists: the original mock could only inject failures by mutating a
+Python `set` from the same process. That works when tests mount the
+application in-process (ophelie's case), and not at all when the mock runs in
+a container — insights360's case, in docker compose as in a Tekton sidecar.
 
-Deux décisions de conception :
+Two design decisions:
 
-  • le préfixe `/__admin` est HORS de `/api`. D'une part aucune collision n'est
-    possible avec un vrai chemin BoondManager ; d'autre part une NetworkPolicy
-    ou une règle d'ingress peut le bloquer en bloc, sans connaître les routes ;
+  • the `/__admin` prefix is OUTSIDE of `/api`. On one hand no collision is
+    possible with a real BoondManager path; on the other, a NetworkPolicy or
+    an ingress rule can block it wholesale, with no route-level knowledge;
 
-  • le routeur n'est PAS MONTÉ quand `BOOND_MOCK_ADMIN_ENABLED` est faux. Pas
-    « monté puis interdit » : absent. Le déploiement d'ophelie le laisse à
-    false, donc la surface n'existe simplement pas sur le cluster.
+  • the router is NOT MOUNTED when `BOOND_MOCK_ADMIN_ENABLED` is false. Not
+    "mounted then forbidden": absent. Ophelie's deployment leaves it at
+    false, so the surface simply does not exist on the cluster.
 """
 
 from __future__ import annotations
@@ -73,9 +73,9 @@ def get_state(x_mock_admin_token: str | None = Header(default=None)) -> JSONResp
     """
     if (denied := _guard(x_mock_admin_token)) is not None:
         return denied
-    # L'observation avance le monde : l'état rendu reflète les événements
-    # d'évolution devenus dus, même si aucune requête de données n'a eu lieu.
-    state.avancer_evolution(engine.now())
+    # Observing advances the world: the rendered state reflects evolution
+    # events that have become due, even if no data request has occurred.
+    state.advance_evolution(engine.now())
     return JSONResponse(
         {
             "seed": state.seed,
@@ -83,15 +83,15 @@ def get_state(x_mock_admin_token: str | None = Header(default=None)) -> JSONResp
             "request_counts_by_path": dict(engine.request_counts),
             "last_query_params_by_path": dict(engine.last_query_params),
             "query_params_by_path": {
-                chemin: list(appels) for chemin, appels in engine.query_params_history.items()
+                path: list(calls) for path, calls in engine.query_params_history.items()
             },
             "injections": engine.snapshot(),
             "fail_collections": sorted(state.fail_collections),
             "clock_offset": engine.clock_offset,
-            # L'évolution temporelle : combien d'événements ont eu lieu, et
-            # lesquels — c'est ce qui permet de VÉRIFIER qu'une extraction
-            # incrémentale a vu exactement le delta attendu.
-            "evolution": state.evolution.apercu(),
+            # Time evolution: how many events have occurred, and which ones —
+            # this is what lets an incremental extraction be VERIFIED to have
+            # seen exactly the expected delta.
+            "evolution": state.evolution.overview(),
         }
     )
 
@@ -165,26 +165,25 @@ async def mutate(
     Body: {"collection": "resources", "id": "3",
            "attributes": {...}, "relationships": {...}}
 
-    Les RELATIONS sont patchables au même titre que les attributs, et ce n'est
-    pas un raffinement : chez BoondManager, le manager d'une ressource
-    (`mainManager`) et son agence (`agency`) sont des relations JSON:API, pas
-    des attributs. Sans elles, ce plan de contrôle ne sait simuler ni une
-    réaffectation d'entité ni un changement de hiérarchie — c'est-à-dire
-    précisément les deux mutations qu'un consommateur qui dérive des DROITS
-    D'ACCÈS d'un organigramme a besoin d'éprouver.
+    RELATIONSHIPS are patchable just like attributes, and this is not a nice-
+    to-have: at BoondManager, a resource's manager (`mainManager`) and its
+    agency (`agency`) are JSON:API relationships, not attributes. Without
+    this, the control plane could not simulate either an entity reassignment
+    or a hierarchy change — precisely the two mutations a consumer deriving
+    ACCESS RIGHTS from an org chart needs to exercise.
 
-    Un patch qui ne correspond à RIEN est refusé (400) plutôt qu'accepté :
-    voir `_verifier_clefs`.
+    A patch that matches NOTHING is refused (400) rather than accepted: see
+    `_check_keys`.
     """
     if (denied := _guard(x_mock_admin_token)) is not None:
         return denied
     body = await request.json()
     collection = body.get("collection")
     item_id = str(body.get("id"))
-    patch_attributs = body.get("attributes", {})
+    patch_attributes = body.get("attributes", {})
     patch_relations = body.get("relationships", {})
 
-    if not patch_attributs and not patch_relations:
+    if not patch_attributes and not patch_relations:
         return error(400, "nothing to patch: give 'attributes' and/or 'relationships'")
 
     items = state.dataset.get(collection)
@@ -192,15 +191,15 @@ async def mutate(
         return error(404, f"collection {collection!r} not found")
     for item in items:
         if item["id"] == item_id:
-            if (refus := _verifier_clefs(item, patch_attributs, patch_relations)) is not None:
-                return refus
-            item.setdefault("attributes", {}).update(patch_attributs)
-            _fusionner_relations(item, patch_relations)
-            # L'avancée de l'horodatage n'est pas cosmétique : sans elle, le
-            # curseur incrémental ne reverrait jamais l'enregistrement modifié,
-            # et le test d'incrémentalité passerait en ne testant rien.
-            item["attributes"][_UPDATED_AT] = _horodate_apres_tous(items, item)
-            state.invalider_caches()
+            if (refusal := _check_keys(item, patch_attributes, patch_relations)) is not None:
+                return refusal
+            item.setdefault("attributes", {}).update(patch_attributes)
+            _merge_relations(item, patch_relations)
+            # Bumping the timestamp is not cosmetic: without it, the
+            # incremental cursor would never see the modified record again,
+            # and the incrementality test would pass while testing nothing.
+            item["attributes"][_UPDATED_AT] = _timestamp_after_all(items, item)
+            state.invalidate_caches()
             return JSONResponse({"status": "mutated", "id": item_id})
     return error(404, f"{collection}/{item_id} not found")
 
@@ -228,8 +227,8 @@ async def soft_delete(
     for item in items:
         if item["id"] == item_id:
             item.setdefault("attributes", {})["isDeleted"] = True
-            item["attributes"][_UPDATED_AT] = _horodate_apres_tous(items, item)
-            state.invalider_caches()
+            item["attributes"][_UPDATED_AT] = _timestamp_after_all(items, item)
+            state.invalidate_caches()
             return JSONResponse({"status": "soft-deleted", "id": item_id})
     return error(404, f"{collection}/{item_id} not found")
 
@@ -249,106 +248,106 @@ async def clock(
         return denied
     body = await request.json()
     engine.clock_offset += float(body.get("advance_seconds", 0))
-    state.avancer_evolution(engine.now())
+    state.advance_evolution(engine.now())
     return JSONResponse({"clock_offset": engine.clock_offset})
 
 
-def _verifier_clefs(
+def _check_keys(
     item: dict[str, Any],
-    patch_attributs: dict[str, Any],
+    patch_attributes: dict[str, Any],
     patch_relations: dict[str, Any],
 ) -> JSONResponse | None:
-    """Refuse un patch dont une clef n'existe pas sur l'enregistrement.
+    """Refuses a patch whose key does not exist on the record.
 
-    Le mode de panne que cette garde ferme, et il a coûté une demi-journée :
-    patcher `attributes: {"main_manager_id": …}` — le nom de la COLONNE vue à
-    l'arrivée du pipeline, pas celui de la relation JSON:API — renvoyait
-    `{"status": "mutated"}` en ne changeant rien. Le scénario de test aval
-    passait au VERT en n'ayant rien éprouvé : le pire résultat possible pour
-    un plan de contrôle dont la raison d'être est justement de faire bouger
-    quelque chose.
+    The failure mode this guard closes cost half a day: patching
+    `attributes: {"main_manager_id": …}` — the COLUMN name seen on arrival in
+    the pipeline, not the JSON:API relationship's name — returned
+    `{"status": "mutated"}` while changing nothing. The downstream test
+    scenario passed GREEN having exercised nothing: the worst possible
+    outcome for a control plane whose whole point is to make something move.
 
-    Le refus nomme les clefs disponibles : dans ce cas précis, la réponse
-    contient `mainManager` et le testeur voit immédiatement son erreur.
+    The refusal names the available keys: in this exact case, the response
+    carries `mainManager` and the tester sees their mistake immediately.
     """
-    relations_connues = item.get("relationships", {})
-    inconnues_a = [c for c in patch_attributs if c not in item.get("attributes", {})]
-    inconnues_r = [c for c in patch_relations if c not in relations_connues]
-    if not inconnues_a and not inconnues_r:
+    known_relations = item.get("relationships", {})
+    unknown_attrs = [c for c in patch_attributes if c not in item.get("attributes", {})]
+    unknown_rels = [c for c in patch_relations if c not in known_relations]
+    if not unknown_attrs and not unknown_rels:
         return None
 
     details = []
-    if inconnues_a:
-        details.append(f"unknown attribute(s) {sorted(inconnues_a)}")
-    if inconnues_r:
-        details.append(f"unknown relationship(s) {sorted(inconnues_r)}")
+    if unknown_attrs:
+        details.append(f"unknown attribute(s) {sorted(unknown_attrs)}")
+    if unknown_rels:
+        details.append(f"unknown relationship(s) {sorted(unknown_rels)}")
     return error(
         400,
-        f"{'; '.join(details)} — available relationships: {sorted(relations_connues)}",
+        f"{'; '.join(details)} — available relationships: {sorted(known_relations)}",
     )
 
 
-def _fusionner_relations(item: dict[str, Any], patch: dict[str, Any]) -> None:
-    """Applique un patch de relations, clef par clef.
+def _merge_relations(item: dict[str, Any], patch: dict[str, Any]) -> None:
+    """Applies a relationship patch, key by key.
 
-    Clef par clef et non en bloc : patcher `mainManager` ne doit pas emporter
-    `agency` avec lui — symétrique du `.update()` des attributs.
+    Key by key and not in bulk: patching `mainManager` must not carry
+    `agency` along with it — symmetric to the attributes' `.update()`.
 
-    Deux écritures sont acceptées, et c'est délibéré :
+    Two notations are accepted, and this is deliberate:
 
-      • la forme canonique JSON:API, `{"agency": {"data": {"id": "2",
-        "type": "agency"}}}`, quand le test veut être explicite ;
-      • l'identifiant nu, `{"agency": "2"}`, qui REPREND le `type` déjà porté
-        par l'enregistrement. Plus court à écrire, et surtout impossible à
-        désaccorder : le type ne passe jamais par la main du testeur.
+      • the canonical JSON:API shape, `{"agency": {"data": {"id": "2",
+        "type": "agency"}}}`, when the test wants to be explicit;
+      • the bare identifier, `{"agency": "2"}`, which REUSES the `type`
+        already carried by the record. Shorter to write, and above all
+        impossible to get wrong: the type never passes through the tester's
+        hand.
     """
     relations = item.setdefault("relationships", {})
-    for nom, valeur in patch.items():
-        if isinstance(valeur, dict):
-            relations[nom] = valeur
+    for name, value in patch.items():
+        if isinstance(value, dict):
+            relations[name] = value
             continue
-        type_courant = relations[nom].get("data", {}).get("type")
-        relations[nom] = {"data": {"id": str(valeur), "type": type_courant}}
+        current_type = relations[name].get("data", {}).get("type")
+        relations[name] = {"data": {"id": str(value), "type": current_type}}
 
 
 _UPDATED_AT = "updateDate"
 
 
-def _horodate_apres_tous(items: list[dict[str, Any]], item: dict[str, Any]) -> str:
-    """Le nouvel horodatage dépasse le MAXIMUM de la collection.
+def _timestamp_after_all(items: list[dict[str, Any]], item: dict[str, Any]) -> str:
+    """The new timestamp exceeds the collection's MAXIMUM.
 
-    Pas seulement celui de l'enregistrement modifié, et c'est la différence qui
-    compte : un curseur incrémental avance sur le maximum VU. Un `updateDate`
-    bumpé depuis la valeur propre à l'item retombe presque toujours SOUS ce
-    maximum, la modification devient invisible au run suivant, et le test
-    d'incrémentalité passe en ne testant rien.
+    Not just the modified record's own value, and that difference is what
+    matters: an incremental cursor advances on the maximum SEEN. An
+    `updateDate` bumped from the item's own value almost always falls BELOW
+    that maximum, the modification becomes invisible on the next run, and the
+    incrementality test passes while testing nothing.
 
-    C'est aussi le comportement réel : une API horodate la mutation à l'instant
-    où elle a lieu, donc au-dessus de tout ce qui précède.
+    It is also the real behavior: a real API timestamps a mutation at the
+    moment it happens, hence above everything that precedes it.
     """
-    courant = item.get("attributes", {}).get(_UPDATED_AT)
+    current = item.get("attributes", {}).get(_UPDATED_AT)
     maximum = max(
         (i.get("attributes", {}).get(_UPDATED_AT) or "" for i in items),
-        default=courant,
+        default=current,
     )
-    return _bump(maximum or courant)
+    return _bump(maximum or current)
 
 
 def _bump(current: str | None) -> str:
-    """Avance l'horodatage d'une seconde, de façon déterministe.
+    """Advances a timestamp by one second, deterministically.
 
-    Pas de `datetime.now()` : la mutation doit rester reproductible d'un run à
-    l'autre. Le décalage du fuseau est CONSERVÉ au format fournisseur
-    (`+0200`, sans deux-points) — c'est celui que sert tout le jeu de données.
+    No `datetime.now()`: the mutation must stay reproducible from one run to
+    the next. The timezone offset is KEPT in the vendor's format (`+0200`, no
+    colon) — the one the whole dataset serves.
     """
     import contextlib
     from datetime import datetime, timedelta
 
     base = datetime(2026, 1, 1, tzinfo=UTC)
     if current:
-        # Un horodatage illisible retombe sur la base fixe plutôt que de faire
-        # échouer la mutation : le mock doit rester utilisable même si un test a
-        # écrit n'importe quoi dans le champ.
+        # An unreadable timestamp falls back to the fixed base rather than
+        # failing the mutation: the mock must stay usable even if a test wrote
+        # garbage into the field.
         with contextlib.suppress(ValueError):
             base = datetime.fromisoformat(current.replace("Z", "+00:00"))
     return (base + timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%S%z")

@@ -297,7 +297,7 @@ The dataset evolves (see `evolution.py`). `BOOND_MOCK_EVOLUTION=false`
 freezes everything. The real API moves because humans are working.
 
 
-### 6. `GET /application/dictionary` — route ajoutée, forme inventée
+### 6. `GET /application/dictionary` — route added, shape invented
 
 `state`, `actionOnCandidate`, `typeOf` (`invented`).
 

@@ -15,12 +15,28 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from .evolution import Evolution
 from .included import TYPE_TO_KEY
 from .injection import engine
 from .settings import settings
+
+
+@dataclass(frozen=True)
+class PendingDeletion:
+    """A physical deletion armed for "right after page N" of the next walk.
+
+    The middle of a read is where a deletion hurts: the walk has already
+    counted the record in `totals.rows`, then never sees it. A consumer that
+    proves deletions from complete reads only must notice the walk is no
+    longer complete — this is what lets that be tested.
+    """
+
+    collection: str
+    item_id: str
+    after_page: int
 
 
 def build_dataset(seed: int = 42) -> dict[str, Any]:
@@ -39,6 +55,7 @@ class MockState:
         # in-process. New failures go through `injection.engine`, which is
         # controllable over HTTP.
         self.fail_collections: set[str] = set()
+        self.pending_deletions: list[PendingDeletion] = []
         self.seed: int = settings.seed
         self.evolution: Evolution = Evolution(self.seed, time.time())
         self._index: dict[tuple[str, str], dict[str, Any]] | None = None
@@ -58,6 +75,7 @@ class MockState:
         self.seed = settings.seed if seed is None else seed
         self.dataset = build_dataset(self.seed)
         self.fail_collections = set()
+        self.pending_deletions = []
         engine.clear()
         engine.reset_counters()
         self.evolution = Evolution(self.seed, time.time())
@@ -99,6 +117,37 @@ class MockState:
 
     def totals(self) -> dict[str, int]:
         return {k: len(v) for k, v in self.dataset.items() if isinstance(v, list)}
+
+    # ── Physical deletions ───────────────────────────────────────────────────
+
+    def hard_delete(self, dataset_key: str, item_id: str) -> bool:
+        """Removes the record for good: gone from lists, totals and detail views.
+
+        In place, so every holder of the collection's list sees the same world.
+        A record that still references it (a manager, an agency) keeps the
+        reference: `included` skips what it cannot resolve, as the vendor does
+        with a link to a deleted profile.
+        """
+        items = self.dataset.get(dataset_key)
+        if not isinstance(items, list):
+            return False
+        kept = [item for item in items if item["id"] != item_id]
+        if len(kept) == len(items):
+            return False
+        items[:] = kept
+        self.invalidate_caches()
+        return True
+
+    def apply_pending_deletions(self, dataset_key: str, page: int) -> None:
+        """Applies the deletions armed for right after this page of this collection."""
+        due = [
+            pending
+            for pending in self.pending_deletions
+            if (pending.collection, pending.after_page) == (dataset_key, page)
+        ]
+        for pending in due:
+            self.pending_deletions.remove(pending)
+            self.hard_delete(pending.collection, pending.item_id)
 
 
 def _apply_baseline_injections() -> None:

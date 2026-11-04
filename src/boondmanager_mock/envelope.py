@@ -356,7 +356,12 @@ def apply_order(
             reverse = params.get("order", "asc").lower() == "desc"
         return sorted(items, key=lambda i: _sortable_value(i, sort_field), reverse=reverse)
 
-    unstable = not settings.stable_order or engine.first("unstable_order", "*") is not None
+    # The rule is matched on the collection's PATH. Until 0.12.0 it was looked
+    # up against the literal "*", so only a rule scoped "*" ever fired, and
+    # its `times` was never consumed.
+    path = f"/api/{collection}" if collection else "*"
+    rule = engine.first("unstable_order", path)
+    unstable = not settings.stable_order or (rule is not None and rule.consume())
     if unstable:
         return sorted(items, key=lambda i: hash((request_index, i.get("id"))))
 
@@ -441,6 +446,17 @@ def paginate(
         return None
     cap = MAXRESULTS_CAPS.get(collection or "", settings.max_results_cap)
     if requested > cap:
+        requested = settings.default_max_results
+    elif (
+        collection is not None
+        and (rule := engine.first("maxresults_cap", f"/api/{collection}")) is not None
+        and rule.limit is not None
+        and requested > rule.limit
+        and rule.consume()
+    ):
+        # An injected, lower cap — the way the vendor's own cap behaves, but
+        # at a value the test chooses: a client that assumed its page size
+        # was honoured walks 30-row pages and must still finish the walk.
         requested = settings.default_max_results
     page_size = max(1, requested)
     start = (page - 1) * page_size

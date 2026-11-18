@@ -186,14 +186,32 @@ All driveable over HTTP via `/__admin/inject`:
 | `kind` | Reproduces |
 |---|---|
 | `rate_limit` | `429` with `Retry-After` after N requests |
-| `status` | transient `500`/`503` (a `times` counter) or persistent ones |
+| `status` | transient `500`/`503` (a `times` counter) or persistent ones; with `after_requests`, only past the N-th call on the path (since 0.12.0) |
 | `latency` | slow responses, to exercise timeouts |
 | `page_drift` | one record served on two consecutive pages — the classic cause of silent duplication |
 | `auth_reject` | authentication rejection with the right status code |
-| `unstable_order` | enables ordering instability (pagination chaos) |
+| `unstable_order` | enables ordering instability (pagination chaos), on its `scope` only (since 0.12.0) |
+| `page_cap` | pages beyond `after_page` come back empty while `totals.rows` is unchanged: a walk that looks finished and is not (0.12.0) |
+| `maxresults_cap` | a `maxResults` above `limit` falls back to the default 30 rows, like the vendor above its own cap (0.12.0) |
+| `ignore_period` | the `period` filter is accepted and not applied — the response does not narrow (0.12.0) |
+
+Every rule takes `scope` (a glob on the path) and `times`; any other option
+must be one its kind reads. **An option the kind does not read is refused
+(422)** and the message lists the ones it reads — until 0.12.0 it was dropped
+silently, so `after_requests` on a `status` rule fired on the first call.
 
 And to simulate source-side changes: `POST /__admin/mutate` (bumps
-`updateDate`), `POST /__admin/delete` (logical deletion via `isDeleted`).
+`updateDate`), `POST /__admin/delete`:
+
+| Body | Effect |
+|---|---|
+| `{"collection": "resources", "id": "8"}` | **logical** deletion via `isDeleted` (the default) |
+| `{"collection": "resources", "id": "8", "mode": "hard"}` | **physical** deletion, what the vendor does: gone from lists, totals, and its detail view is a 404 (0.12.0) |
+| `{…, "mode": "hard", "after_page": 1}` | the same, right after page 1 of the next walk of that collection: the middle of a read (0.12.0) |
+
+An unknown `mode`, or `after_page` without `"mode": "hard"`, is refused (422).
+`GET /__admin/state` exposes `total_requests` (every call under `/api`, routed
+or not), `refused_methods` (405s) and `pending_deletions`.
 
 `mutate` patches **attributes and relationships**, key by key:
 

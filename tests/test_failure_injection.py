@@ -344,6 +344,166 @@ def test_the_params_history_keeps_every_call(client) -> None:
     assert state["last_query_params_by_path"]["/api/resources"] == calls[-1]
 
 
+def test_state_counts_every_call_and_the_refused_methods(client) -> None:
+    """`total_requests` covers unrouted calls too; `/health` and `/__admin` are not calls."""
+    client.get("/api/resources", headers=JWT)
+    client.get("/api/agencies", headers=JWT)
+    client.get("/api/no-such-collection", headers=JWT)
+    client.post("/api/resources", headers=JWT)
+    client.get("/health")
+    state = client.get("/__admin/state", headers=ADMIN).json()
+    assert state["total_requests"] == 4
+    assert state["refused_methods"] == 1
+
+
+# ── 0.12.0: the levers of the extractor's own fake ───────────────────────────
+#
+# The Boond extractor's prototype carried a second fake Boond for the faults
+# this mock lacked. One fake, not two: they live here now.
+
+
+def _inject(client, **rule) -> None:
+    response = client.post("/__admin/inject", headers=ADMIN, json=rule)
+    assert response.status_code == 200, response.text
+
+
+def test_status_fires_only_after_n_requests(client) -> None:
+    """The third call fails, not the first: a failure in the middle of a walk."""
+    _inject(client, kind="status", scope="/api/resources", status=503, after_requests=2, times=1)
+    assert client.get("/api/resources", headers=JWT).status_code == 200
+    assert client.get("/api/resources", headers=JWT).status_code == 200
+    assert client.get("/api/resources", headers=JWT).status_code == 503
+    assert client.get("/api/resources", headers=JWT).status_code == 200
+
+
+def test_inject_refuses_an_option_its_kind_does_not_read(client) -> None:
+    """An option accepted and dropped makes the test exercise something else."""
+    response = client.post(
+        "/__admin/inject",
+        headers=ADMIN,
+        json={"kind": "status", "scope": "/api/resources", "status": 503, "mode": "insert"},
+    )
+    assert response.status_code == 422
+    assert "mode" in response.text
+    assert "after_requests" in response.text, "the message names what the kind reads"
+
+
+def test_auth_reject_preempts_valid_credentials(client) -> None:
+    _inject(client, kind="auth_reject", scope="/api/resources", status=401, times=1)
+    assert client.get("/api/resources", headers=JWT).status_code == 401
+    assert client.get("/api/resources", headers=JWT).status_code == 200
+
+
+def test_page_cap_empties_later_pages_and_keeps_the_totals(client) -> None:
+    """The walk ends early and looks finished: only the totals tell it is not."""
+    _inject(client, kind="page_cap", scope="/api/resources", after_page=1)
+    params = {"maxResults": 10}
+    page1 = client.get("/api/resources", headers=JWT, params={**params, "page": 1}).json()
+    page2 = client.get("/api/resources", headers=JWT, params={**params, "page": 2}).json()
+    assert len(page1["data"]) == 10
+    assert page2["data"] == []
+    assert page1["meta"]["totals"]["rows"] == TOTAL_RESOURCES
+    assert page2["meta"]["totals"]["rows"] == TOTAL_RESOURCES
+
+
+def test_maxresults_cap_falls_back_to_the_default_page(client) -> None:
+    _inject(client, kind="maxresults_cap", scope="/api/resources", limit=20)
+    above = client.get("/api/resources", headers=JWT, params={"maxResults": 25}).json()
+    assert len(above["data"]) == 30, "above the injected cap: the default page size"
+    at_cap = client.get("/api/resources", headers=JWT, params={"maxResults": 20}).json()
+    assert len(at_cap["data"]) == 20
+
+
+def test_maxresults_cap_needs_a_limit(client) -> None:
+    response = client.post(
+        "/__admin/inject",
+        headers=ADMIN,
+        json={"kind": "maxresults_cap", "scope": "/api/resources"},
+    )
+    assert response.status_code == 422
+
+
+def test_ignore_period_serves_everything(client) -> None:
+    """The filter is sent, accepted — and not applied, like `updatedSince` was."""
+    window = {
+        "period": "updated",
+        "startDate": "2099-01-01",
+        "endDate": "2099-12-31",
+        "maxResults": 500,
+    }
+    narrowed = client.get("/api/resources", headers=JWT, params=window).json()
+    assert narrowed["meta"]["totals"]["rows"] == 0
+    _inject(client, kind="ignore_period", scope="/api/resources")
+    ignored = client.get("/api/resources", headers=JWT, params=window).json()
+    assert ignored["meta"]["totals"]["rows"] == TOTAL_RESOURCES
+
+
+def test_unstable_order_honours_its_scope(client) -> None:
+    """Scoped to /api/resources, it shuffles resources and nothing else."""
+    _inject(client, kind="unstable_order", scope="/api/resources")
+    params = {"maxResults": 10}
+    a = client.get("/api/resources", headers=JWT, params=params).json()["data"]
+    b = client.get("/api/resources", headers=JWT, params=params).json()["data"]
+    assert [d["id"] for d in a] != [d["id"] for d in b]
+    c = client.get("/api/companies", headers=JWT, params=params).json()["data"]
+    d = client.get("/api/companies", headers=JWT, params=params).json()["data"]
+    assert [x["id"] for x in c] == [x["id"] for x in d], "another collection stays stable"
+
+
+def test_hard_delete_removes_the_record_everywhere(client) -> None:
+    """What the vendor does: no flag, the record is gone — list, totals, detail."""
+    response = client.post(
+        "/__admin/delete",
+        headers=ADMIN,
+        json={"collection": "resources", "id": "8", "mode": "hard"},
+    )
+    assert response.json() == {"status": "hard-deleted", "id": "8"}
+    listed = client.get("/api/resources", headers=JWT, params={"maxResults": 500}).json()
+    assert listed["meta"]["totals"]["rows"] == TOTAL_RESOURCES - 1
+    assert "8" not in {d["id"] for d in listed["data"]}
+    assert client.get("/api/resources/8", headers=JWT).status_code == 404
+
+
+def test_hard_delete_after_page_strikes_in_the_middle_of_a_walk(client) -> None:
+    """Page 1 counted the record in its totals; the rest of the walk never serves it."""
+    full = client.get("/api/resources", headers=JWT, params={"maxResults": 500}).json()
+    victim = full["data"][-1]["id"]  # on the last page of a 10-row walk
+    armed = client.post(
+        "/__admin/delete",
+        headers=ADMIN,
+        json={"collection": "resources", "id": victim, "mode": "hard", "after_page": 1},
+    )
+    assert armed.json()["status"] == "deletion-pending"
+    pages = [
+        client.get("/api/resources", headers=JWT, params={"maxResults": 10, "page": n}).json()
+        for n in range(1, 5)
+    ]
+    assert pages[0]["meta"]["totals"]["rows"] == TOTAL_RESOURCES
+    assert pages[1]["meta"]["totals"]["rows"] == TOTAL_RESOURCES - 1
+    served = [d["id"] for page in pages for d in page["data"]]
+    assert victim not in served
+    assert len(served) == TOTAL_RESOURCES - 1
+    assert client.get("/__admin/state", headers=ADMIN).json()["pending_deletions"] == []
+
+
+def test_deletion_refuses_an_unknown_mode_or_a_soft_after_page(client) -> None:
+    """Until 0.12.0, `"mode": "hard"` answered 200 and soft-deleted."""
+    unknown = client.post(
+        "/__admin/delete",
+        headers=ADMIN,
+        json={"collection": "resources", "id": "8", "mode": "purge"},
+    )
+    assert unknown.status_code == 422
+    soft_later = client.post(
+        "/__admin/delete",
+        headers=ADMIN,
+        json={"collection": "resources", "id": "8", "after_page": 1},
+    )
+    assert soft_later.status_code == 422
+    total = client.get("/api/resources", headers=JWT).json()["meta"]["totals"]["rows"]
+    assert total == TOTAL_RESOURCES, "a refused deletion deletes nothing"
+
+
 def test_reset_changes_the_seed(client) -> None:
     """The seed is settable over HTTP — and reset confirms it."""
     response = client.post("/__admin/reset", headers=ADMIN, json={"seed": 7})

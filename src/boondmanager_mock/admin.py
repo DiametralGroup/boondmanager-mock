@@ -25,9 +25,9 @@ from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 
 from .errors import error
-from .injection import engine
+from .injection import KINDS, allowed_options, engine
 from .settings import settings
-from .state import state
+from .state import PendingDeletion, state
 
 router = APIRouter(prefix="/__admin", tags=["admin"])
 
@@ -80,12 +80,18 @@ def get_state(x_mock_admin_token: str | None = Header(default=None)) -> JSONResp
         {
             "seed": state.seed,
             "totals": state.totals(),
+            "total_requests": engine.total_requests,
+            "refused_methods": engine.refused_methods,
             "request_counts_by_path": dict(engine.request_counts),
             "last_query_params_by_path": dict(engine.last_query_params),
             "query_params_by_path": {
                 path: list(calls) for path, calls in engine.query_params_history.items()
             },
             "injections": engine.snapshot(),
+            "pending_deletions": [
+                {"collection": p.collection, "id": p.item_id, "after_page": p.after_page}
+                for p in state.pending_deletions
+            ],
             "fail_collections": sorted(state.fail_collections),
             "clock_offset": engine.clock_offset,
             # Time evolution: how many events have occurred, and which ones —
@@ -109,21 +115,36 @@ async def inject(
       {"kind":"latency","scope":"*","seconds":2.5,"times":1}
       {"kind":"page_drift","scope":"/api/resources","after_page":1,"mode":"insert"}
       {"kind":"auth_reject","scope":"*","status":401}
-      {"kind":"unstable_order","scope":"*"}
+      {"kind":"unstable_order","scope":"/api/resources"}
+      {"kind":"status","scope":"/api/resources","status":503,"after_requests":2}
+      {"kind":"page_cap","scope":"/api/resources","after_page":1}
+      {"kind":"maxresults_cap","scope":"/api/resources","limit":100}
+      {"kind":"ignore_period","scope":"/api/resources"}
+
+    An option the kind does not read is REFUSED (422), and the message names
+    the ones it reads. Until 0.12.0 it was accepted and dropped: `after_requests`
+    on a `status` rule answered 200 and fired on the first call, so a test of
+    "a failure in the middle of a walk" exercised a failure at its start. Same
+    doctrine as `/mutate`'s refusal of an unknown key.
     """
     if (denied := _guard(x_mock_admin_token)) is not None:
         return denied
     body = await request.json()
     kind = body.pop("kind", None)
-    if kind not in {
-        "rate_limit",
-        "status",
-        "latency",
-        "page_drift",
-        "auth_reject",
-        "unstable_order",
-    }:
+    if kind not in KINDS:
         return error(422, f"unknown injection kind: {kind!r}")
+    unknown = sorted(set(body) - allowed_options(kind))
+    if unknown:
+        return error(
+            422,
+            f"option(s) {unknown} not read by kind {kind!r} — "
+            f"it reads: {sorted(allowed_options(kind))}",
+        )
+    limit = body.get("limit")
+    if kind == "maxresults_cap" and (
+        isinstance(limit, bool) or not isinstance(limit, int) or limit < 1
+    ):
+        return error(422, "maxresults_cap needs an integer 'limit' >= 1")
     try:
         rule = engine.add(kind=kind, **body)
     except TypeError as exc:
@@ -204,33 +225,89 @@ async def mutate(
     return error(404, f"{collection}/{item_id} not found")
 
 
+_DELETE_KEYS = frozenset({"collection", "id", "mode", "after_page"})
+
+
 @router.post("/delete")
-async def soft_delete(
+async def delete(
     request: Request,
     x_mock_admin_token: str | None = Header(default=None),
 ) -> JSONResponse:
-    """LOGICAL deletion — a flag plus a timestamp bump.
+    """Deletion — LOGICAL by default, PHYSICAL on request.
 
-    Never a physical deletion, and that is a decision, not a shortcut: an
-    incremental pipeline running a `merge` strategy CANNOT observe a physical
-    deletion without a full refresh. Pretending otherwise is exactly how ACL
-    tables keep granting access to leavers.
+    `"mode": "soft"` (the default) sets a flag and bumps the timestamp. It
+    stays the default, and for a reason: an incremental pipeline running a
+    `merge` strategy CANNOT observe a physical deletion without a full
+    refresh, and pretending otherwise is exactly how ACL tables keep granting
+    access to leavers.
+
+    `"mode": "hard"` is what the vendor actually does: Boond exposes no
+    `isDeleted` (docs/UNVERIFIED-FIELDS.md §1), a deleted record simply
+    vanishes from lists, totals and detail views (404). A consumer that proves
+    deletions from complete reads needs that, not a flag it would never read.
+    With `"after_page": N`, the deletion happens right after page N of the
+    next walk of that collection has been served — the middle of a read.
+
+    Body: {"collection": "resources", "id": "8"}
+          {"collection": "resources", "id": "8", "mode": "hard"}
+          {"collection": "resources", "id": "8", "mode": "hard", "after_page": 1}
+
+    An unknown mode or key is refused (422): until 0.12.0, `"mode": "hard"`
+    answered 200 and soft-deleted.
     """
     if (denied := _guard(x_mock_admin_token)) is not None:
         return denied
     body = await request.json()
+    if (refusal := _deletion_refusal(body)) is not None:
+        return refusal
     collection = body.get("collection")
     item_id = str(body.get("id"))
+    found = _lookup(collection, item_id)
+    if isinstance(found, JSONResponse):
+        return found
+    items, item = found
+    after_page = body.get("after_page")
+    if body.get("mode", "soft") == "soft":
+        item.setdefault("attributes", {})["isDeleted"] = True
+        item["attributes"][_UPDATED_AT] = _timestamp_after_all(items, item)
+        state.invalidate_caches()
+        return JSONResponse({"status": "soft-deleted", "id": item_id})
+    if after_page is None:
+        state.hard_delete(collection, item_id)
+        return JSONResponse({"status": "hard-deleted", "id": item_id})
+    state.pending_deletions.append(PendingDeletion(collection, item_id, after_page))
+    return JSONResponse({"status": "deletion-pending", "id": item_id, "after_page": after_page})
+
+
+def _deletion_refusal(body: dict[str, Any]) -> JSONResponse | None:
+    """422 for an unknown key or mode, or an `after_page` a soft deletion cannot honour."""
+    if unknown := sorted(set(body) - _DELETE_KEYS):
+        return error(422, f"unknown key(s) {unknown} — accepted: {sorted(_DELETE_KEYS)}")
+    mode = body.get("mode", "soft")
+    if mode not in ("soft", "hard"):
+        return error(422, f"unknown deletion mode {mode!r}: 'soft' or 'hard'")
+    after_page = body.get("after_page")
+    if after_page is not None and (
+        mode != "hard"
+        or isinstance(after_page, bool)
+        or not isinstance(after_page, int)
+        or after_page < 1
+    ):
+        return error(422, "after_page needs mode 'hard' and an integer >= 1")
+    return None
+
+
+def _lookup(
+    collection: Any, item_id: str
+) -> tuple[list[dict[str, Any]], dict[str, Any]] | JSONResponse:
+    """The collection's list and the record, or the 404 naming what is missing."""
     items = state.dataset.get(collection)
     if not isinstance(items, list):
         return error(404, f"collection {collection!r} not found")
-    for item in items:
-        if item["id"] == item_id:
-            item.setdefault("attributes", {})["isDeleted"] = True
-            item["attributes"][_UPDATED_AT] = _timestamp_after_all(items, item)
-            state.invalidate_caches()
-            return JSONResponse({"status": "soft-deleted", "id": item_id})
-    return error(404, f"{collection}/{item_id} not found")
+    item = next((candidate for candidate in items if candidate["id"] == item_id), None)
+    if item is None:
+        return error(404, f"{collection}/{item_id} not found")
+    return items, item
 
 
 @router.post("/clock")

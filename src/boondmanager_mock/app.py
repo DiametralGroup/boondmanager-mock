@@ -259,7 +259,11 @@ def _dispatch_injections(path: str, params: dict[str, str]) -> JSONResponse | No
             headers={"Retry-After": str(rule.retry_after_seconds)},
         )
 
-    if (rule := engine.first("status", path)) is not None and rule.consume():
+    if (
+        (rule := engine.first("status", path)) is not None
+        and index > rule.after_requests
+        and rule.consume()
+    ):
         return error(rule.status, f"mock: injected {rule.status} on {path}")
 
     return None
@@ -274,7 +278,7 @@ def _collection_items(dataset_key: str) -> list[dict[str, Any]]:
 #  Application
 # ─────────────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="BoondManager mock", version="0.11.0", docs_url="/docs")
+app = FastAPI(title="BoondManager mock", version="0.12.0", docs_url="/docs")
 api = APIRouter(prefix="/api")
 
 
@@ -284,8 +288,12 @@ async def _http_error(request: Request, exc: StarletteHTTPException) -> JSONResp
 
     Observed real behavior: `/times/{id}` → enveloped 404, `GET /deliveries`
     → enveloped 405 — with a meta OUTSIDE A SESSION (routing precedes auth).
+
+    Counted like any other call (`total_requests`, and `refused_methods` for a
+    405): a request that reaches no route still reached the vendor.
     """
     if exc.status_code in (404, 405):
+        engine.observe_unrouted(request.url.path, exc.status_code)
         return error(exc.status_code, request=request, logged_in=False)
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
@@ -353,7 +361,12 @@ def _paginated(request: Request, spec: CollectionSpec) -> JSONResponse:
     # the vendor does. Do NOT turn this into a 422: the real API rejects
     # nothing, it simply renders everything, and a consumer seeing an error
     # here would be fixing a problem that does not exist.
-    items = apply_period(items, params, spec.periods)
+    #
+    # `ignore_period` drops the filter the consumer DID send: the case of a
+    # filter accepted and silently not applied (`updatedSince`, 2026-09-29).
+    # A consumer must notice the response did not narrow, not trust it did.
+    if (skip := engine.first("ignore_period", path)) is None or not skip.consume():
+        items = apply_period(items, params, spec.periods)
     items = apply_incremental(items, extract_since(params))
 
     total = len(items)
@@ -365,6 +378,15 @@ def _paginated(request: Request, spec: CollectionSpec) -> JSONResponse:
     page_slice, page, page_size = paged
     if (drift := apply_page_drift(items, page, page_size, path)) is not None:
         page_slice = drift
+    if (
+        (cap := engine.first("page_cap", path)) is not None
+        and page > cap.after_page
+        and cap.consume()
+    ):
+        # Empty pages while `totals.rows` is unchanged: the walk ends early and
+        # looks finished. Only a consumer that compares what it received with
+        # the announced total sees that it is not.
+        page_slice = []
 
     included = (
         build_included(page_slice, state.dataset, dataset_key, state.entity_index())
@@ -372,7 +394,10 @@ def _paginated(request: Request, spec: CollectionSpec) -> JSONResponse:
         else None
     )
     extras = {key: META_EXTRAS[key] for key in spec.meta_extra}
-    return JSONResponse(envelope(page_slice, total, included, extras))
+    body = envelope(page_slice, total, included, extras)
+    # After the page is built, so the record is still on it if it belonged there.
+    state.apply_pending_deletions(dataset_key, page)
+    return JSONResponse(body)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
